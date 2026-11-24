@@ -337,6 +337,17 @@ function publicUserView(user) {
     ...creditInfo(user)
   };
 }
+function settleMonthlyOrder(order, timelineText, now = new Date().toISOString()) {
+  order.paymentStatus = 'settled';
+  order.settledAt = now;
+  order.paidAt = now;
+  if (!order.pointsAwarded) {
+    const customer = db.users.find(u => u.id === order.userId);
+    if (customer) customer.points = (customer.points || 0) + Math.floor(order.pay);
+    order.pointsAwarded = true;
+  }
+  order.timeline.push({ time: now, text: timelineText });
+}
 
 /* ------------------------------------------------------------------ 业务员 */
 function salesGuard(req, res) {
@@ -911,10 +922,7 @@ route('POST', '/api/admin/orders/:id/settle', (req, res, p) => {
   if (!order) return fail(res, '订单不存在', 404);
   if (!isMonthlyUnsettled(order)) return fail(res, '该订单不是未结月结订单', 400);
   const now = new Date().toISOString();
-  order.paymentStatus = 'settled';
-  order.settledAt = now;
-  order.paidAt = now;
-  order.timeline.push({ time: now, text: '月结回款已登记' });
+  settleMonthlyOrder(order, '月结回款已登记', now);
   save(); ok(res, { order });
 });
 
@@ -1229,10 +1237,7 @@ route('POST', '/api/sales/orders/:id/settle', (req, res, p) => {
   if (!order) return fail(res, '订单不存在', 404);
   if (!isMonthlyUnsettled(order)) return fail(res, '该订单不是未结月结订单', 400);
   const now = new Date().toISOString();
-  order.paymentStatus = 'settled';
-  order.settledAt = now;
-  order.paidAt = now;
-  order.timeline.push({ time: now, text: `业务员 ${s.name} 登记月结回款` });
+  settleMonthlyOrder(order, `业务员 ${s.name} 登记月结回款`, now);
   save(); ok(res, { order: salesOrderView(order) });
 });
 
