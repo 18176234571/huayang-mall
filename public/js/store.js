@@ -54,6 +54,7 @@ function openLogin(mode = 'login') {
     <p class="muted">${isLogin ? '使用手机号登录，体验完整购物流程' : '注册即送 5 元新人券'}</p>
     <div class="field"><label>手机号</label><input id="mPhone" placeholder="请输入 11 位手机号" value="${isLogin ? '13900000001' : ''}"></div>
     ${isLogin ? '' : '<div class="field"><label>昵称</label><input id="mName" placeholder="怎么称呼您"></div>'}
+    ${isLogin ? '' : '<div class="field"><label>业务员邀请码（选填）</label><input id="mCode" placeholder="如 S001，填写后客户归属该业务员"></div>'}
     <div class="field"><label>密码</label><input id="mPwd" type="password" placeholder="至少 6 位" value="${isLogin ? '123456' : ''}"></div>
     <button class="btn btn-primary" id="mSubmit">${isLogin ? '登录' : '注册并登录'}</button>
     <div class="switch">${isLogin ? '还没有账号？<a href="javascript:;" onclick="openLogin(\'register\')">立即注册</a>' : '已有账号？<a href="javascript:;" onclick="openLogin(\'login\')">去登录</a>'}</div>
@@ -62,8 +63,9 @@ function openLogin(mode = 'login') {
   $('#mSubmit').onclick = async () => {
     const phone = $('#mPhone').value.trim(), password = $('#mPwd').value.trim();
     try {
-      const body = isLogin ? { phone, password } : { phone, password, name: ($('#mName') || {}).value || '' };
+      const body = isLogin ? { phone, password } : { phone, password, name: ($('#mName') || {}).value || '', salesCode: ($('#mCode') || {}).value || '' };
       const data = await api('/api/auth/' + (isLogin ? 'login' : 'register'), { method: 'POST', body });
+      if (isLogin && data.user.role === 'sales') { closeModal(); toast('业务员请从业务员工作台登录'); location.href = '/sales'; return; }
       state.token = data.token; localStorage.setItem('hy_token', data.token); state.user = data.user;
       closeModal(); toast('登录成功，欢迎回来');
       syncHeader(); refreshCartCount(); render();

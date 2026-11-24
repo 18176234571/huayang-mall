@@ -28,6 +28,7 @@ const MENU = [
   ['inventory', '📥', '库存管理'],
   ['marketing', '🎟️', '营销中心'],
   ['members', '👥', '会员管理'],
+  ['sales', '👔', '业务员管理'],
   ['settings', '⚙️', '店铺设置']
 ];
 const TITLES = {
@@ -37,6 +38,7 @@ const TITLES = {
   inventory: ['库存管理', '监控可售库存，及时补货'],
   marketing: ['营销中心', '优惠券与包邮规则配置'],
   members: ['会员管理', '查看会员消费与订单情况'],
+  sales: ['业务员管理', '业务团队、客户归属与业绩'],
   settings: ['店铺设置', '店铺基础信息与首页轮播']
 };
 const STATUS_TEXT = { pending: '待付款', paid: '待发货', shipped: '已发货', completed: '已完成', cancelled: '已取消' };
@@ -89,6 +91,7 @@ async function renderPage() {
     else if (S.page === 'inventory') await renderInventory(page);
     else if (S.page === 'marketing') await renderMarketing(page);
     else if (S.page === 'members') await renderMembers(page);
+    else if (S.page === 'sales') await renderSales(page);
     else if (S.page === 'settings') await renderSettings(page);
   } catch (e) {
     page.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
@@ -299,7 +302,7 @@ async function renderOrders(page) {
       <tbody>${d.list.map(o => `<tr>
         <td><b>${o.orderNo}</b><br><small class="muted">${o.items.reduce((s, i) => s + i.qty, 0)} 件</small></td>
         <td><div class="goods-cell"><img src="${o.items[0].img}"><div>${esc(o.items[0].name)}${o.items.length > 1 ? `<br><small class="muted">等 ${o.items.length} 种</small>` : ''}</div></div></td>
-        <td>${esc((o.address || {}).name || '-')}<br><small class="muted">${esc((o.address || {}).phone || '')}</small></td>
+        <td>${esc((o.address || {}).name || '-')}<br><small class="muted">${esc((o.address || {}).phone || '')}</small>${o.salesName ? `<br><small class="muted">业务员 ${esc(o.salesName)}</small>` : ''}</td>
         <td class="price">${money(o.pay)}</td>
         <td><span class="badge ${STATUS_BADGE[o.status]}">${STATUS_TEXT[o.status]}</span></td>
         <td class="muted">${new Date(o.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
@@ -423,11 +426,102 @@ async function renderMembers(page) {
       <table><thead><tr><th>会员</th><th>手机号</th><th>角色</th><th>订单数</th><th>累计消费</th><th>积分</th><th>注册时间</th></tr></thead>
       <tbody>${d.list.map(u => `<tr>
         <td><div class="goods-cell"><div style="width:34px;height:34px;border-radius:50%;background:#eaf5f0;color:#0f6b57;display:flex;align-items:center;justify-content:center">${esc(u.name.slice(0, 1))}</div><b>${esc(u.name)}</b></div></td>
-        <td>${u.phone}</td><td><span class="badge ${u.role === 'admin' ? 'b-gold' : 'b-green'}">${u.role === 'admin' ? '管理员' : '会员'}</span></td>
+        <td>${u.phone}</td><td><span class="badge ${u.role === 'admin' ? 'b-gold' : (u.role === 'sales' ? 'b-blue' : 'b-green')}">${u.role === 'admin' ? '管理员' : (u.role === 'sales' ? '业务员' : '会员')}</span>${u.role === 'user' ? `<br><small class="muted">${esc(u.salesName || '未分配业务员')}</small>` : ''}</td>
         <td>${u.orderCount}</td><td class="price">${money(u.amount)}</td><td>${u.points}</td>
         <td class="muted">${new Date(u.createdAt).toLocaleDateString('zh-CN')}</td></tr>`).join('')}</tbody></table>
     </div>`;
 }
+
+/* ---------------- 业务员管理 ---------------- */
+async function renderSales(page) {
+  const tab = S.tab.sales || 'team';
+  const d = await api('/api/admin/sales');
+  S.cache.adminSales = d.list;
+  const members = (await api('/api/admin/users')).list.filter(u => u.role === 'user');
+  const monthAmount = d.list.reduce((s, x) => s + x.monthAmount, 0);
+  const unassigned = members.filter(u => !u.salesId).length;
+  if (tab === 'team') {
+    page.innerHTML = setTabs('sales', [['team', '业务员团队'], ['customers', '客户分配']], tab) + `
+      <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
+        <div class="kpi"><div class="label"><i>👔</i>业务员</div><b>${d.list.length}</b><small>在岗 ${d.list.filter(x => x.active).length} 人</small></div>
+        <div class="kpi"><div class="label"><i>💰</i>本月开单</div><b>${money(monthAmount)}</b><small>按业务员归属统计</small></div>
+        <div class="kpi"><div class="label"><i>⚠️</i>未分配客户</div><b>${unassigned}</b><small>共 ${members.length} 个客户账号</small></div>
+      </div>
+      <div class="toolbar" style="margin-top:18px"><button class="btn btn-sm btn-primary" onclick="newSales()">＋ 新增业务员</button><span class="grow"></span><span class="muted" style="font-size:12.5px">业务员登录入口 /sales</span></div>
+      <div class="panel" style="padding:0;overflow:hidden">
+        <table><thead><tr><th>业务员</th><th>手机号</th><th>客户数</th><th>本月开单</th><th>提成</th><th>状态</th><th style="text-align:right">操作</th></tr></thead>
+        <tbody>${d.list.map(s => `<tr>
+          <td><b>${esc(s.name)}</b><br><small class="muted">${esc(s.salesCode)} · ${esc(s.region || '未设置区域')}</small></td>
+          <td>${s.phone}</td><td>${s.customers}</td>
+          <td class="price">${money(s.monthAmount)}<br><small class="muted">${s.monthOrders} 单</small></td>
+          <td>${s.commissionRate}%<br><small class="muted">${money(s.commission)}</small></td>
+          <td><span class="badge ${s.active ? 'b-green' : 'b-gray'}">${s.active ? '启用' : '停用'}</span></td>
+          <td style="text-align:right"><button class="btn btn-sm btn-ghost" onclick="editSales('${s.id}')">编辑</button><button class="btn btn-sm ${s.active ? 'btn-danger' : 'btn-ghost'}" onclick="toggleSales('${s.id}',${s.active})">${s.active ? '停用' : '启用'}</button></td>
+        </tr>`).join('') || '<tr><td colspan="7"><div class="empty">还没有业务员，点击右上角新增</div></td></tr>'}</tbody></table>
+      </div>`;
+    return;
+  }
+  page.innerHTML = setTabs('sales', [['team', '业务员团队'], ['customers', '客户分配']], 'customers') + `
+    <div class="toolbar"><span class="muted" style="font-size:12.5px">共 ${members.length} 个客户，${unassigned} 个未分配</span><span class="grow"></span><span class="muted" style="font-size:12.5px">选择业务员后立即保存归属</span></div>
+    <div class="panel" style="padding:0;overflow:hidden">
+      <table><thead><tr><th>客户</th><th>手机号</th><th>单位 / 许可证</th><th>累计消费</th><th>归属业务员</th></tr></thead>
+      <tbody>${members.map(u => `<tr>
+        <td><b>${esc(u.name)}</b><br><small class="muted">${u.orderCount} 单 · 积分 ${u.points}</small></td>
+        <td>${u.phone}</td>
+        <td>${esc(u.company || '-')}<br><small class="muted">${esc(u.licenseNo || '未登记许可证')}</small></td>
+        <td class="price">${money(u.amount)}</td>
+        <td><select onchange="assignCustomer('${u.id}',this.value)" style="height:34px;border:1px solid #e6eae7;border-radius:8px;padding:0 8px;background:#fff">
+          <option value="">未分配</option>
+          ${d.list.map(s => `<option value="${s.id}" ${u.salesId === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+        </select></td>
+      </tr>`).join('') || '<tr><td colspan="5"><div class="empty">暂无客户账号</div></td></tr>'}</tbody></table>
+    </div>`;
+}
+
+function openSalesModal(sales) {
+  const s = sales || {};
+  openModal(`<h3>${sales ? '编辑业务员' : '新增业务员'}</h3>
+    ${sales ? `<p class="muted" style="margin-bottom:14px">业务员编码 ${esc(s.salesCode)}</p>` : ''}
+    <div class="field"><label>姓名</label><input id="saName" value="${esc(s.name || '')}" placeholder="如 业务员小李"></div>
+    <div class="row2">
+      <div class="field"><label>手机号（登录账号）</label><input id="saPhone" value="${esc(s.phone || '')}" placeholder="11 位手机号"></div>
+      <div class="field"><label>${sales ? '新密码（留空不改）' : '登录密码'}</label><input id="saPwd" type="password" placeholder="至少 6 位"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>提成比例（%）</label><input id="saRate" type="number" min="0" max="20" value="${s.commissionRate || 3}"></div>
+      <div class="field"><label>负责区域</label><input id="saRegion" value="${esc(s.region || '')}" placeholder="如 湛江市区"></div>
+    </div>
+    <button class="btn btn-primary" onclick="saveSales(${sales ? `'${sales.id}'` : 'null'})">${sales ? '保存修改' : '创建业务员'}</button>`);
+}
+window.newSales = () => openSalesModal(null);
+window.editSales = id => openSalesModal((S.cache.adminSales || []).find(x => x.id === id));
+
+window.saveSales = async id => {
+  const body = {
+    name: $('#saName').value.trim(), phone: $('#saPhone').value.trim(),
+    password: $('#saPwd').value, commissionRate: Number($('#saRate').value),
+    region: $('#saRegion').value.trim()
+  };
+  if (!body.password) delete body.password;
+  try {
+    if (id) await api('/api/admin/sales/' + id, { method: 'PUT', body });
+    else await api('/api/admin/sales', { method: 'POST', body });
+    closeModal();
+    toast(id ? '业务员信息已更新' : '业务员已创建，可用手机号登录 /sales');
+    renderPage();
+  } catch (e) { toast(e.message); }
+};
+
+window.toggleSales = async (id, active) => {
+  if (!confirm(active ? '确定停用该业务员？停用后无法登录工作台。' : '确定启用该业务员？')) return;
+  try { await api('/api/admin/sales/' + id + '/status', { method: 'POST', body: { active: !active } }); toast(active ? '已停用' : '已启用'); renderPage(); }
+  catch (e) { toast(e.message); }
+};
+
+window.assignCustomer = async (id, salesId) => {
+  try { await api('/api/admin/customers/' + id + '/assign', { method: 'POST', body: { salesId } }); toast(salesId ? '客户归属已更新' : '已取消归属'); renderPage(); }
+  catch (e) { toast(e.message); }
+};
 
 /* ---------------- 店铺设置 ---------------- */
 async function renderSettings(page) {

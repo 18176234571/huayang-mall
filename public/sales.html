@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>华阳自营商城 · 业务员工作台</title>
+<link rel="stylesheet" href="/css/admin.css">
+<link rel="stylesheet" href="/css/sales.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230d3f34'/><rect x='8' y='9' width='16' height='4' fill='white'/><rect x='8' y='16' width='16' height='4' fill='%23b8924a'/><rect x='8' y='23' width='10' height='3' fill='white'/></svg>">
+</head>
+<body>
+<div class="gate" id="loginGate">
+  <div class="gate-card">
+    <div class="gate-brand"><span class="brand-mark">华</span><div><b>华阳自营商城</b><small>业务员工作台</small></div></div>
+    <h2>业务员登录</h2>
+    <p class="muted">管理我的客户、代客下单、跟踪订单与业绩</p>
+    <div class="field"><label>手机号</label><input id="loginPhone" value="13600000004"></div>
+    <div class="field"><label>登录密码</label><input id="loginPwd" type="password" value="123456"></div>
+    <button class="btn btn-primary" id="loginBtn" style="width:100%">进入工作台</button>
+    <p class="gate-tip">演示账号 13600000004 / 123456 · <a href="/">返回商城前台</a></p>
+  </div>
+</div>
+
+<div class="shell" id="salesShell" hidden>
+  <aside class="sidebar">
+    <div class="side-brand"><span class="brand-mark">华</span><div><b>华阳自营</b><small>业务员工作台</small></div></div>
+    <nav class="side-nav" id="sideNav"></nav>
+    <div class="side-foot">
+      <a href="/" target="_blank">↗ 打开商城前台</a>
+      <a href="javascript:;" onclick="logout()">退出登录</a>
+    </div>
+  </aside>
+  <div class="content">
+    <header class="content-top">
+      <div><h1 id="pageTitle">工作台</h1><p id="pageSub" class="muted"></p></div>
+      <div class="top-right">
+        <span class="live-dot"></span><span class="muted" style="font-size:12.5px">数据实时</span>
+        <span class="divider"></span>
+        <span class="admin-name" id="salesName">业务员</span>
+      </div>
+    </header>
+    <main id="page" class="page"></main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="modal-mask" id="modalMask"><div class="modal" id="modalBox"></div></div>
+
+<script src="/js/sales.js"></script>
+</body>
+</html>

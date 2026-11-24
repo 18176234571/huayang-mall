@@ -141,8 +141,9 @@ function seedDB() {
 
   const users = [
     { id: 'u1', phone: '13800000000', name: '平台管理员', pwd: hash('admin123'), role: 'admin', points: 0, createdAt: nowISO(-120) },
-    { id: 'u2', phone: '13900000001', name: '陈先生', pwd: hash('123456'), role: 'user', points: 1200, createdAt: nowISO(-60) },
-    { id: 'u3', phone: '13700000002', name: '李女士', pwd: hash('123456'), role: 'user', points: 680, createdAt: nowISO(-15) }
+    { id: 'u2', phone: '13900000001', name: '陈先生', pwd: hash('123456'), role: 'user', points: 1200, createdAt: nowISO(-60), salesId: 'u4', company: '湛江华阳诊所', licenseNo: '粤PDY00001', licenseExpiry: nowISO(180).slice(0, 10), region: '广东省 湛江市 赤坎区', detail: '海田路 88 号华阳大厦 6 楼' },
+    { id: 'u3', phone: '13700000002', name: '李女士', pwd: hash('123456'), role: 'user', points: 680, createdAt: nowISO(-15), salesId: 'u4', company: '霞山惠民药房', licenseNo: '粤DA00002', licenseExpiry: nowISO(90).slice(0, 10), region: '广东省 湛江市 霞山区', detail: '人民大道南 12 号 3 栋 502' },
+    { id: 'u4', phone: '13600000004', name: '业务员小李', pwd: hash('123456'), role: 'sales', points: 0, salesCode: 'S001', commissionRate: 3, region: '湛江市区', active: true, createdAt: nowISO(-45) }
   ];
 
   const coupons = [
@@ -198,11 +199,15 @@ function seedDB() {
     ],
     categories: cats, products, users, addresses, coupons,
     carts: {}, orders,
+    visits: [
+      { id: 'v1', salesId: 'u4', customerId: 'u2', content: '回访诊所本月用量，确认下月补货计划', nextAt: nowISO(2).slice(0, 10), createdAt: nowISO(-2) },
+      { id: 'v2', salesId: 'u4', customerId: 'u3', content: '收集药房首营资料，已提醒许可证到期换证', nextAt: nowISO(5).slice(0, 10), createdAt: nowISO(-1) }
+    ],
     userCoupons: {
       u2: [{ couponId: 'cp1', status: 'unused' }, { couponId: 'cp2', status: 'unused' }],
       u3: [{ couponId: 'cp3', status: 'unused' }]
     },
-    seq: { order: 14 }
+    seq: { order: 14, sales: 1, visit: 2 }
   };
 }
 
@@ -221,6 +226,10 @@ function save() {
 }
 
 const db = loadDB();
+db.visits = Array.isArray(db.visits) ? db.visits : [];
+db.seq = db.seq || { order: db.orders.length + 1 };
+db.seq.sales = Number(db.seq.sales || 0);
+db.seq.visit = Number(db.seq.visit || db.visits.length);
 
 /* ------------------------------------------------------------------ 工具 */
 function send(res, code, data) {
@@ -296,6 +305,72 @@ function orderTotal(items, coupon) {
   return { total: round(total), freight: round(freight), discount: round(discount), pay: round(Math.max(0, total + freight - discount)) };
 }
 
+/* ------------------------------------------------------------------ 业务员 */
+function salesGuard(req, res) {
+  const user = currentUser(req);
+  if (!user || user.role !== 'sales') { fail(res, '无业务员权限', 401); return null; }
+  if (user.active === false) { fail(res, '业务员账号已停用', 403); return null; }
+  return user;
+}
+function salesById(id) { return db.users.find(u => u.id === id && u.role === 'sales') || null; }
+function orderSalesId(order) {
+  if (order.salesId) return order.salesId;
+  const customer = db.users.find(u => u.id === order.userId);
+  return (customer && customer.salesId) || '';
+}
+function orderSalesName(order) {
+  const sales = salesById(orderSalesId(order));
+  return sales ? sales.name : '';
+}
+function monthRange(month) {
+  const now = new Date();
+  const m = /^\d{4}-\d{2}$/.test(String(month || '')) ? String(month) : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const start = new Date(m + '-01T00:00:00');
+  const end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+  return { month: m, start, end };
+}
+function salesOrdersFor(salesId) {
+  return db.orders.filter(o => orderSalesId(o) === salesId && o.status !== 'cancelled');
+}
+function customerSummary(customer) {
+  const orders = db.orders.filter(o => o.userId === customer.id && o.status !== 'cancelled');
+  return {
+    orderCount: orders.length,
+    amount: round(orders.reduce((s, o) => s + o.pay, 0)),
+    lastOrderAt: orders.length ? orders.map(o => o.createdAt).sort().slice(-1)[0] : null
+  };
+}
+function salesStats(sales, month) {
+  const { month: m, start, end } = monthRange(month);
+  const orders = salesOrdersFor(sales.id).filter(o => {
+    const t = new Date(o.createdAt).getTime();
+    return t >= start.getTime() && t < end.getTime();
+  });
+  const paidOrders = orders.filter(o => ['paid', 'shipped', 'completed'].includes(o.status));
+  const amount = round(orders.reduce((s, o) => s + o.pay, 0));
+  const paidAmount = round(paidOrders.reduce((s, o) => s + o.pay, 0));
+  const pendingAmount = round(orders.filter(o => o.status === 'pending').reduce((s, o) => s + o.pay, 0));
+  const rate = Number(sales.commissionRate || 0);
+  const commission = round(paidAmount * rate / 100);
+  const byCustomer = {};
+  orders.forEach(o => {
+    const c = db.users.find(u => u.id === o.userId);
+    const key = o.userId;
+    if (!byCustomer[key]) byCustomer[key] = { customerId: key, name: (c && c.name) || '客户', company: (c && c.company) || '', amount: 0, orders: 0 };
+    byCustomer[key].amount += o.pay;
+    byCustomer[key].orders += 1;
+  });
+  const topCustomers = Object.values(byCustomer).map(x => ({ ...x, amount: round(x.amount) })).sort((a, b) => b.amount - a.amount).slice(0, 6);
+  const daily = [];
+  const today = new Date();
+  const lastDay = m === `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}` ? today.getDate() : new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate();
+  for (let d = 1; d <= lastDay; d++) {
+    const dayOrders = orders.filter(o => new Date(o.createdAt).getDate() === d);
+    daily.push({ day: d, amount: round(dayOrders.reduce((s, o) => s + o.pay, 0)), orders: dayOrders.length });
+  }
+  return { month: m, orderCount: orders.length, paidCount: paidOrders.length, amount, paidAmount, pendingAmount, commission, rate, topCustomers, daily };
+}
+
 /* ------------------------------------------------------------------ 路由 */
 const routes = [];
 function route(method, path, handler, opt = {}) {
@@ -364,11 +439,16 @@ route('GET', '/api/products/:id', (req, res, p) => {
 
 /* ---- 账号 ---- */
 route('POST', '/api/auth/register', async (req, res) => {
-  const { phone, name, password } = await readBody(req);
+  const { phone, name, password, salesCode } = await readBody(req);
   if (!/^1\d{10}$/.test(phone || '')) return fail(res, '请输入正确的 11 位手机号');
   if (!password || password.length < 6) return fail(res, '密码至少 6 位');
   if (db.users.some(u => u.phone === phone)) return fail(res, '该手机号已注册');
-  const user = { id: 'u' + (db.users.length + 1) + Date.now().toString(36), phone, name: name || '新用户', pwd: hash(password), role: 'user', points: 0, createdAt: new Date().toISOString() };
+  let sales = null;
+  if (salesCode) {
+    sales = db.users.find(u => u.role === 'sales' && u.salesCode === String(salesCode).trim().toUpperCase() && u.active !== false);
+    if (!sales) return fail(res, '业务员邀请码无效');
+  }
+  const user = { id: 'u' + (db.users.length + 1) + Date.now().toString(36), phone, name: name || '新用户', pwd: hash(password), role: 'user', points: 0, createdAt: new Date().toISOString(), salesId: sales ? sales.id : '' };
   db.users.push(user); save();
   ok(res, { token: signToken(user), user: { id: user.id, phone, name: user.name, role: 'user', points: 0 } });
 });
@@ -377,13 +457,13 @@ route('POST', '/api/auth/login', async (req, res) => {
   const { phone, password } = await readBody(req);
   const user = db.users.find(u => u.phone === phone);
   if (!user || user.pwd !== hash(password || '')) return fail(res, '手机号或密码错误');
-  ok(res, { token: signToken(user), user: { id: user.id, phone: user.phone, name: user.name, role: user.role, points: user.points } });
+  ok(res, { token: signToken(user), user: { id: user.id, phone: user.phone, name: user.name, role: user.role, points: user.points, salesId: user.salesId || '', salesCode: user.salesCode || '', commissionRate: user.commissionRate || 0 } });
 });
 
 route('GET', '/api/auth/me', (req, res) => {
   const user = currentUser(req);
   if (!user) return fail(res, '请先登录', 401);
-  ok(res, { user: { id: user.id, phone: user.phone, name: user.name, role: user.role, points: user.points } });
+  ok(res, { user: { id: user.id, phone: user.phone, name: user.name, role: user.role, points: user.points, salesId: user.salesId || '', salesCode: user.salesCode || '', commissionRate: user.commissionRate || 0 } });
 });
 
 route('POST', '/api/auth/password', async (req, res) => {
@@ -583,6 +663,7 @@ route('POST', '/api/orders', async (req, res) => {
     id, orderNo: genOrderNo(id), userId: user.id, status: 'pending', items,
     total: calc.total, freight: calc.freight, discount: calc.discount, pay: calc.pay,
     address: addr, remark: b.remark || '', createdAt: new Date().toISOString(), paidAt: null,
+    salesId: user.salesId || '', salesName: (salesById(user.salesId) || {}).name || '', createdBy: 'customer',
     express: null, timeline: [{ time: new Date().toISOString(), text: '订单提交成功' }]
   };
   // 扣库存
@@ -762,7 +843,8 @@ route('GET', '/api/admin/orders', (req, res, p, query) => {
   let list = db.orders.slice();
   if (query.status && query.status !== 'all') list = list.filter(o => o.status === query.status);
   if (query.keyword) list = list.filter(o => o.orderNo.includes(query.keyword) || (o.address && o.address.name.includes(query.keyword)));
-  ok(res, { list });
+  if (query.salesId) list = list.filter(o => orderSalesId(o) === query.salesId);
+  ok(res, { list: list.map(o => ({ ...o, salesId: orderSalesId(o), salesName: o.salesName || orderSalesName(o) })) });
 });
 
 route('POST', '/api/admin/orders/:id/ship', async (req, res, p) => {
@@ -830,7 +912,8 @@ route('GET', '/api/admin/users', (req, res) => {
   if (!adminGuard(req, res)) return;
   const list = db.users.map(u => {
     const orders = db.orders.filter(o => o.userId === u.id && o.status !== 'cancelled');
-    return { id: u.id, phone: u.phone, name: u.name, role: u.role, points: u.points, orderCount: orders.length, amount: round(orders.reduce((s, o) => s + o.pay, 0)), createdAt: u.createdAt };
+    const sales = salesById(u.salesId);
+    return { id: u.id, phone: u.phone, name: u.name, role: u.role, points: u.points, orderCount: orders.length, amount: round(orders.reduce((s, o) => s + o.pay, 0)), createdAt: u.createdAt, company: u.company || '', licenseNo: u.licenseNo || '', licenseExpiry: u.licenseExpiry || '', salesId: u.salesId || '', salesName: sales ? sales.name : '' };
   });
   ok(res, { list });
 });
@@ -854,6 +937,331 @@ route('POST', '/api/admin/categories', async (req, res) => {
   if (!b.name) return fail(res, '分类名称必填');
   const c = { id: 'c' + Date.now().toString(36), name: b.name, icon: b.icon || '📦', desc: b.desc || '', sort: db.categories.length + 1 };
   db.categories.push(c); save(); ok(res, { category: c });
+});
+
+/* ------------------------------------------------------------------ 业务员工作台 */
+function salesCustomerView(c) {
+  const summary = customerSummary(c);
+  return {
+    id: c.id, name: c.name, phone: c.phone, company: c.company || '', licenseNo: c.licenseNo || '',
+    licenseExpiry: c.licenseExpiry || '', region: c.region || '', detail: c.detail || '', note: c.note || '',
+    points: c.points || 0, createdAt: c.createdAt, ...summary
+  };
+}
+function customerAddress(c) {
+  return { name: c.name, phone: c.phone, region: c.region || '', detail: c.detail || '' };
+}
+function salesOrderView(o) {
+  const customer = db.users.find(u => u.id === o.userId);
+  return { ...o, customerName: (customer && customer.name) || (o.address && o.address.name) || '', customerPhone: (customer && customer.phone) || (o.address && o.address.phone) || '', salesName: o.salesName || orderSalesName(o) };
+}
+
+route('GET', '/api/sales/profile', (req, res) => {
+  const s = salesGuard(req, res); if (!s) return;
+  ok(res, { profile: { id: s.id, name: s.name, phone: s.phone, salesCode: s.salesCode || '', commissionRate: Number(s.commissionRate || 0), region: s.region || '', active: s.active !== false } });
+});
+
+route('GET', '/api/sales/overview', (req, res) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const stats = salesStats(s);
+  const customers = db.users.filter(u => u.role === 'user' && u.salesId === s.id);
+  const myOrders = salesOrdersFor(s.id);
+  const today = new Date().toISOString().slice(0, 10);
+  const soon = new Date(); soon.setDate(soon.getDate() + 7);
+  const soonText = soon.toISOString().slice(0, 10);
+  const visits = db.visits.filter(v => v.salesId === s.id);
+  const pendingVisits = visits.filter(v => v.nextAt && String(v.nextAt).slice(0, 10) <= soonText);
+  ok(res, {
+    cards: {
+      customers: customers.length,
+      monthAmount: stats.amount,
+      monthOrders: stats.orderCount,
+      commission: stats.commission,
+      pendingShip: myOrders.filter(o => o.status === 'paid').length,
+      pendingVisits: pendingVisits.length,
+      month: stats.month
+    },
+    recent: myOrders.slice(0, 5).map(salesOrderView),
+    visits: pendingVisits.sort((a, b) => String(a.nextAt).localeCompare(String(b.nextAt))).slice(0, 5).map(v => {
+      const c = db.users.find(u => u.id === v.customerId);
+      return { ...v, customerName: (c && c.name) || '客户', company: (c && c.company) || '' };
+    }),
+    stats: { rate: stats.rate, paidAmount: stats.paidAmount, pendingAmount: stats.pendingAmount, today }
+  });
+});
+
+route('GET', '/api/sales/customers', (req, res, p, query) => {
+  const s = salesGuard(req, res); if (!s) return;
+  let list = db.users.filter(u => u.role === 'user' && u.salesId === s.id).map(salesCustomerView);
+  if (query.keyword) {
+    const k = String(query.keyword).trim();
+    list = list.filter(c => c.name.includes(k) || c.phone.includes(k) || c.company.includes(k));
+  }
+  list.sort((a, b) => b.amount - a.amount);
+  ok(res, { list });
+});
+
+route('POST', '/api/sales/customers', async (req, res) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const b = await readBody(req);
+  if (!b.name || !String(b.name).trim()) return fail(res, '客户名称必填');
+  if (!/^1\d{10}$/.test(String(b.phone || ''))) return fail(res, '请输入正确的 11 位手机号');
+  const fields = {
+    company: String(b.company || '').trim(), licenseNo: String(b.licenseNo || '').trim(),
+    licenseExpiry: String(b.licenseExpiry || '').trim(), region: String(b.region || '').trim(),
+    detail: String(b.detail || '').trim(), note: String(b.note || '').trim()
+  };
+  let customer = db.users.find(u => u.phone === String(b.phone));
+  let initialPassword = '';
+  if (customer) {
+    if (customer.role !== 'user') return fail(res, '该手机号不是客户账号');
+    if (customer.salesId && customer.salesId !== s.id) return fail(res, '该客户已归属其他业务员');
+    customer.salesId = s.id;
+    customer.name = String(b.name).trim();
+    Object.assign(customer, fields);
+  } else {
+    if (b.password && String(b.password).length < 6) return fail(res, '客户密码至少 6 位');
+    initialPassword = b.password ? String(b.password) : '123456';
+    customer = {
+      id: 'u' + (db.users.length + 1) + Date.now().toString(36), phone: String(b.phone), name: String(b.name).trim(),
+      pwd: hash(initialPassword), role: 'user', points: 0, salesId: s.id, createdAt: new Date().toISOString(), ...fields
+    };
+    db.users.push(customer);
+  }
+  save();
+  ok(res, { customer: salesCustomerView(customer), initialPassword });
+});
+
+route('PUT', '/api/sales/customers/:id', async (req, res, p) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const customer = db.users.find(u => u.id === p.id && u.role === 'user');
+  if (!customer || customer.salesId !== s.id) return fail(res, '客户不存在或不属于你', 404);
+  const b = await readBody(req);
+  if (b.phone && b.phone !== customer.phone) {
+    if (!/^1\d{10}$/.test(String(b.phone))) return fail(res, '请输入正确的 11 位手机号');
+    if (db.users.some(u => u.phone === b.phone && u.id !== customer.id)) return fail(res, '该手机号已被使用');
+    customer.phone = String(b.phone);
+  }
+  if (b.name !== undefined) {
+    if (!String(b.name).trim()) return fail(res, '客户名称不能为空');
+    customer.name = String(b.name).trim();
+  }
+  ['company', 'licenseNo', 'licenseExpiry', 'region', 'detail', 'note'].forEach(k => {
+    if (b[k] !== undefined) customer[k] = String(b[k]).trim();
+  });
+  save(); ok(res, { customer: salesCustomerView(customer) });
+});
+
+route('GET', '/api/sales/customers/:id/orders', (req, res, p) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const customer = db.users.find(u => u.id === p.id && u.role === 'user');
+  if (!customer || customer.salesId !== s.id) return fail(res, '客户不存在或不属于你', 404);
+  ok(res, { list: db.orders.filter(o => o.userId === customer.id).slice(0, 20).map(salesOrderView) });
+});
+
+route('GET', '/api/sales/products', (req, res) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const list = db.products.map(p => ({ id: p.id, name: p.name, sub: p.sub, catId: p.catId, price: p.price, marketPrice: p.marketPrice, stock: p.stock, sales: p.sales, img: p.img, specs: p.specs, tags: p.tags, status: p.status }));
+  ok(res, { list, categories: db.categories });
+});
+
+route('POST', '/api/sales/orders', async (req, res) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const b = await readBody(req);
+  const customer = db.users.find(u => u.id === b.customerId && u.role === 'user');
+  if (!customer) return fail(res, '客户不存在', 404);
+  if (customer.salesId !== s.id) return fail(res, '该客户不属于你', 403);
+  if (!Array.isArray(b.items) || !b.items.length) return fail(res, '请选择商品');
+  const items = [];
+  for (const it of b.items) {
+    const product = db.products.find(x => x.id === it.productId);
+    if (!product || product.status !== 'on') return fail(res, `商品已下架：${it.productId}`, 400);
+    const spec = product.specs.find(x => x.name === it.spec);
+    if (!spec) return fail(res, `商品规格不存在：${product.name}`, 400);
+    const qty = parsePositiveQty(it.qty);
+    if (qty === null) return fail(res, '商品数量必须为大于 0 的整数', 400);
+    if (spec.stock < qty) return fail(res, `库存不足：${product.name}`, 400);
+    items.push({ productId: product.id, name: product.name, spec: spec.name, price: spec.price, qty, img: product.img });
+  }
+  const addr = b.address && Object.keys(b.address).length ? b.address : customerAddress(customer);
+  if (!addr.name || !addr.phone || !addr.region || !addr.detail) return fail(res, '请填写完整的收货地址');
+  if (!/^1\d{10}$/.test(String(addr.phone))) return fail(res, '收货人手机号格式不正确');
+  const calc = orderTotal(items, null);
+  const id = db.seq.order++;
+  const now = new Date().toISOString();
+  const order = {
+    id, orderNo: genOrderNo(id), userId: customer.id, status: 'pending', items,
+    total: calc.total, freight: calc.freight, discount: calc.discount, pay: calc.pay,
+    address: { name: String(addr.name).trim(), phone: String(addr.phone).trim(), region: String(addr.region).trim(), detail: String(addr.detail).trim() },
+    remark: b.remark || '业务员代客下单', createdAt: now, paidAt: null,
+    salesId: s.id, salesName: s.name, createdBy: 'sales',
+    express: null, timeline: [{ time: now, text: `业务员 ${s.name} 代客下单` }]
+  };
+  for (const it of items) {
+    const product = db.products.find(x => x.id === it.productId);
+    const spec = product.specs.find(x => x.name === it.spec);
+    spec.stock -= it.qty; product.stock -= it.qty; product.sales += it.qty;
+  }
+  db.orders.unshift(order); save();
+  ok(res, { order: salesOrderView(order) });
+});
+
+route('GET', '/api/sales/orders', (req, res, p, query) => {
+  const s = salesGuard(req, res); if (!s) return;
+  let list = salesOrdersFor(s.id);
+  if (query.status && query.status !== 'all') list = list.filter(o => o.status === query.status);
+  if (query.customerId) list = list.filter(o => o.userId === query.customerId);
+  if (query.keyword) {
+    const k = String(query.keyword).trim();
+    list = list.filter(o => o.orderNo.includes(k) || ((o.address && o.address.name || '').includes(k)));
+  }
+  ok(res, { list: list.map(salesOrderView) });
+});
+
+route('GET', '/api/sales/orders/:id', (req, res, p) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const order = db.orders.find(o => o.id === Number(p.id) && orderSalesId(o) === s.id);
+  if (!order) return fail(res, '订单不存在', 404);
+  ok(res, { order: salesOrderView(order) });
+});
+
+route('POST', '/api/sales/orders/:id/paid', (req, res, p) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const order = db.orders.find(o => o.id === Number(p.id) && orderSalesId(o) === s.id);
+  if (!order) return fail(res, '订单不存在', 404);
+  if (order.status !== 'pending') return fail(res, '仅待付款订单可登记收款');
+  order.status = 'paid'; order.paidAt = new Date().toISOString();
+  order.timeline.push({ time: order.paidAt, text: `业务员 ${s.name} 登记收款` });
+  const customer = db.users.find(u => u.id === order.userId);
+  if (customer) customer.points = (customer.points || 0) + Math.floor(order.pay);
+  save(); ok(res, { order: salesOrderView(order) });
+});
+
+route('POST', '/api/sales/orders/:id/cancel', (req, res, p) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const order = db.orders.find(o => o.id === Number(p.id) && orderSalesId(o) === s.id);
+  if (!order) return fail(res, '订单不存在', 404);
+  if (order.status !== 'pending') return fail(res, '仅待付款订单可取消');
+  order.status = 'cancelled';
+  order.timeline.push({ time: new Date().toISOString(), text: `业务员 ${s.name} 取消订单` });
+  for (const it of order.items) {
+    const product = db.products.find(x => x.id === it.productId);
+    const spec = product && product.specs.find(x => x.name === it.spec);
+    if (spec) { spec.stock += it.qty; product.stock += it.qty; product.sales -= it.qty; }
+  }
+  save(); ok(res, { order: salesOrderView(order) });
+});
+
+route('GET', '/api/sales/performance', (req, res, p, query) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const stats = salesStats(s, query.month);
+  ok(res, { performance: stats, profile: { name: s.name, commissionRate: Number(s.commissionRate || 0) } });
+});
+
+route('GET', '/api/sales/visits', (req, res, p, query) => {
+  const s = salesGuard(req, res); if (!s) return;
+  let list = db.visits.filter(v => v.salesId === s.id);
+  if (query.customerId) list = list.filter(v => v.customerId === query.customerId);
+  ok(res, { list: list.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).map(v => {
+    const c = db.users.find(u => u.id === v.customerId);
+    return { ...v, customerName: (c && c.name) || '客户', company: (c && c.company) || '' };
+  }) });
+});
+
+route('POST', '/api/sales/visits', async (req, res) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const b = await readBody(req);
+  if (!b.content || !String(b.content).trim()) return fail(res, '请填写拜访内容');
+  let customer = null;
+  if (b.customerId) {
+    customer = db.users.find(u => u.id === b.customerId && u.role === 'user');
+    if (!customer || customer.salesId !== s.id) return fail(res, '客户不存在或不属于你', 403);
+  }
+  const visit = {
+    id: 'v' + (++db.seq.visit), salesId: s.id, customerId: customer ? customer.id : '',
+    content: String(b.content).trim(), nextAt: String(b.nextAt || '').slice(0, 10),
+    createdAt: new Date().toISOString()
+  };
+  db.visits.push(visit); save();
+  ok(res, { visit: { ...visit, customerName: customer ? customer.name : '客户', company: customer ? customer.company || '' : '' } });
+});
+
+/* ------------------------------------------------------------------ 后台业务员管理 */
+route('GET', '/api/admin/sales', (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const list = db.users.filter(u => u.role === 'sales').map(s => {
+    const stats = salesStats(s);
+    const customers = db.users.filter(u => u.role === 'user' && u.salesId === s.id);
+    return { id: s.id, name: s.name, phone: s.phone, salesCode: s.salesCode || '', commissionRate: Number(s.commissionRate || 0), region: s.region || '', active: s.active !== false, customers: customers.length, monthAmount: stats.amount, monthOrders: stats.orderCount, commission: stats.commission, createdAt: s.createdAt };
+  });
+  ok(res, { list });
+});
+
+route('POST', '/api/admin/sales', async (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const b = await readBody(req);
+  if (!b.name || !String(b.name).trim()) return fail(res, '业务员姓名必填');
+  if (!/^1\d{10}$/.test(String(b.phone || ''))) return fail(res, '请输入正确的 11 位手机号');
+  if (db.users.some(u => u.phone === b.phone)) return fail(res, '该手机号已注册');
+  if (!b.password || String(b.password).length < 6) return fail(res, '登录密码至少 6 位');
+  const rate = Number(b.commissionRate || 0);
+  if (!Number.isFinite(rate) || rate < 0 || rate > 20) return fail(res, '提成比例需在 0–20% 之间');
+  const seq = ++db.seq.sales;
+  const sales = {
+    id: 'u' + (db.users.length + 1) + Date.now().toString(36), phone: String(b.phone), name: String(b.name).trim(),
+    pwd: hash(String(b.password)), role: 'sales', points: 0, salesCode: 'S' + String(seq).padStart(3, '0'),
+    commissionRate: rate, region: String(b.region || '').trim(), active: true, createdAt: new Date().toISOString()
+  };
+  db.users.push(sales); save();
+  ok(res, { sales: { id: sales.id, name: sales.name, phone: sales.phone, salesCode: sales.salesCode, commissionRate: sales.commissionRate, region: sales.region } });
+});
+
+route('PUT', '/api/admin/sales/:id', async (req, res, p) => {
+  if (!adminGuard(req, res)) return;
+  const sales = salesById(p.id);
+  if (!sales) return fail(res, '业务员不存在', 404);
+  const b = await readBody(req);
+  if (b.phone && b.phone !== sales.phone) {
+    if (!/^1\d{10}$/.test(String(b.phone))) return fail(res, '请输入正确的 11 位手机号');
+    if (db.users.some(u => u.phone === b.phone && u.id !== sales.id)) return fail(res, '该手机号已被使用');
+    sales.phone = String(b.phone);
+  }
+  if (b.name !== undefined) {
+    if (!String(b.name).trim()) return fail(res, '业务员姓名不能为空');
+    sales.name = String(b.name).trim();
+  }
+  if (b.commissionRate !== undefined) {
+    const rate = Number(b.commissionRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 20) return fail(res, '提成比例需在 0–20% 之间');
+    sales.commissionRate = rate;
+  }
+  if (b.region !== undefined) sales.region = String(b.region).trim();
+  if (b.password) {
+    if (String(b.password).length < 6) return fail(res, '登录密码至少 6 位');
+    sales.pwd = hash(String(b.password));
+  }
+  save(); ok(res, { sales: { id: sales.id, name: sales.name, phone: sales.phone, salesCode: sales.salesCode, commissionRate: sales.commissionRate, region: sales.region, active: sales.active !== false } });
+});
+
+route('POST', '/api/admin/sales/:id/status', async (req, res, p) => {
+  if (!adminGuard(req, res)) return;
+  const sales = salesById(p.id);
+  if (!sales) return fail(res, '业务员不存在', 404);
+  const b = await readBody(req);
+  if (typeof b.active !== 'boolean') return fail(res, '状态参数不合法');
+  sales.active = b.active; save(); ok(res, { active: sales.active });
+});
+
+route('POST', '/api/admin/customers/:id/assign', async (req, res, p) => {
+  if (!adminGuard(req, res)) return;
+  const customer = db.users.find(u => u.id === p.id && u.role === 'user');
+  if (!customer) return fail(res, '客户不存在', 404);
+  const b = await readBody(req);
+  const salesId = b.salesId ? String(b.salesId) : '';
+  if (salesId && !salesById(salesId)) return fail(res, '业务员不存在', 400);
+  customer.salesId = salesId; save();
+  const sales = salesById(salesId);
+  ok(res, { customer: { id: customer.id, name: customer.name, salesId, salesName: sales ? sales.name : '' } });
 });
 
 /* ------------------------------------------------------------------ 图片上传 */
@@ -880,6 +1288,7 @@ function serveStatic(req, res, pathname) {
   let filePath;
   if (pathname === '/' || pathname === '/index.html') filePath = path.join(PUBLIC_DIR, 'index.html');
   else if (pathname === '/admin' || pathname === '/admin.html') filePath = path.join(PUBLIC_DIR, 'admin.html');
+  else if (pathname === '/sales' || pathname === '/sales.html') filePath = path.join(PUBLIC_DIR, 'sales.html');
   else filePath = path.join(PUBLIC_DIR, pathname);
   if (!filePath.startsWith(PUBLIC_DIR)) return fail(res, '禁止访问', 403);
   fs.stat(filePath, (err, st) => {
@@ -914,6 +1323,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  const line = `华阳自营商城已启动\n  商城前台  http://localhost:${PORT}/\n  商家后台  http://localhost:${PORT}/admin\n  管理员    13800000000 / admin123\n  测试用户  13900000001 / 123456`;
+  const line = `华阳自营商城已启动\n  商城前台  http://localhost:${PORT}/\n  商家后台  http://localhost:${PORT}/admin\n  业务员端  http://localhost:${PORT}/sales\n  管理员    13800000000 / admin123\n  测试用户  13900000001 / 123456\n  业务员    13600000004 / 123456`;
   console.log('\n' + line + '\n');
 });
