@@ -1,5 +1,5 @@
 /* 华阳自营商城 · 业务员工作台 */
-const S = { token: localStorage.getItem('hy_sales_token') || '', user: null, page: 'dashboard', tab: {}, cache: { customers: [], products: [], adminSales: [] }, cart: [], orderCustomer: '' };
+const S = { token: localStorage.getItem('hy_sales_token') || '', user: null, page: 'dashboard', tab: {}, payMethod: 'online', cache: { customers: [], products: [], adminSales: [] }, cart: [], orderCustomer: '' };
 const $ = (s, r = document) => r.querySelector(s);
 const money = n => '¥' + Number(n || 0).toFixed(2);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -44,6 +44,20 @@ const TITLES = {
 };
 const STATUS_TEXT = { pending: '待付款', paid: '待发货', shipped: '已发货', completed: '已完成', cancelled: '已取消' };
 const STATUS_BADGE = { pending: 'b-gold', paid: 'b-blue', shipped: 'b-green', completed: 'b-gray', cancelled: 'b-gray' };
+function orderStatusText(o) {
+  const base = STATUS_TEXT[o.status] || o.status;
+  if (o.paymentMethod === 'monthly') {
+    if (o.paymentStatus === 'settled') return base + ' · 已结';
+    if (o.status === 'paid') return '月结待发货';
+    if (o.status === 'shipped') return '已发货 · 未结';
+    if (o.status === 'completed') return '已完成 · 未结';
+  }
+  return base;
+}
+function orderBadgeClass(o) {
+  if (o.paymentMethod === 'monthly' && o.paymentStatus !== 'settled' && o.status !== 'cancelled') return 'b-gold';
+  return STATUS_BADGE[o.status] || 'b-gray';
+}
 
 /* ---------------- 登录 ---------------- */
 $('#loginBtn').onclick = async () => {
@@ -132,7 +146,7 @@ async function renderDashboard(page) {
           <td><b>${o.orderNo}</b><br><small class="muted">${o.items.reduce((s, i) => s + i.qty, 0)} 件</small></td>
           <td>${esc(o.customerName || (o.address || {}).name || '-')}</td>
           <td class="price">${money(o.pay)}</td>
-          <td><span class="badge ${STATUS_BADGE[o.status]}">${STATUS_TEXT[o.status]}</span></td>
+          <td><span class="badge ${orderBadgeClass(o)}">${orderStatusText(o)}</span></td>
           <td class="muted">${fmtDate(o.createdAt)}</td>
         </tr>`).join('') || '<tr><td colspan="5"><div class="empty-compact">还没有代客订单，去“代客下单”开第一单</div></td></tr>'}</tbody></table>
       </div>
@@ -170,7 +184,7 @@ async function renderCustomers(page) {
       <tbody>${d.list.map(c => `<tr data-name="${esc((c.name + ' ' + c.phone + ' ' + c.company).toLowerCase())}">
         <td><b>${esc(c.name)}</b><br><small class="muted">${esc(c.region || '未填写区域')}</small></td>
         <td>${esc(c.phone)}</td>
-        <td>${esc(c.company || '-')}<br>${licenseTag(c)}</td>
+        <td>${esc(c.company || '-')}<br>${licenseTag(c)}${c.monthlyEnabled ? `<br><small class="credit-ok">月结 ${money(c.creditAvailable)} / ${money(c.creditLimit)} · ${c.creditDays}天</small>` : '<br><small class="muted">现款结算</small>'}</td>
         <td>${c.orderCount} 单<br><span class="price">${money(c.amount)}</span></td>
         <td class="muted">${c.lastOrderAt ? fmtDate(c.lastOrderAt) : '暂无'}</td>
         <td style="text-align:right">
@@ -188,6 +202,7 @@ window.filterCustomers = keyword => {
 function customerForm(c) {
   const v = c || {};
   openModal(`<h3>${c ? '编辑客户' : '新增客户'}</h3>
+    ${c ? `<div class="mini-note">支付方式：${c.monthlyEnabled ? `月结 · 额度 ${money(c.creditLimit)} · 已用 ${money(c.creditUsed)} · 账期 ${c.creditDays} 天` : '现款结算'}（月结由后台授信，业务员不可修改）</div>` : '<div class="mini-note">新客户默认现款结算，如需月结请由管理员在后台授信。</div>'}
     <div class="row2">
       <div class="field"><label>客户名称</label><input id="cuName" value="${esc(v.name || '')}" placeholder="联系人姓名"></div>
       <div class="field"><label>手机号（登录账号）</label><input id="cuPhone" value="${esc(v.phone || '')}" placeholder="11 位手机号"></div>
@@ -228,20 +243,21 @@ function captureAddress() {
   S.cache.addr = { name: $('#poName').value, phone: $('#poPhone').value, region: $('#poRegion').value, detail: $('#poDetail').value };
 }
 window.changeOrderCustomer = id => {
-  S.orderCustomer = id; S.cache.addr = null;
+  S.orderCustomer = id; S.cache.addr = null; S.payMethod = 'online';
   renderPage();
 };
-window.startOrder = id => { S.orderCustomer = id; S.cache.addr = null; S.cart = []; go('place'); };
+window.startOrder = id => { S.orderCustomer = id; S.cache.addr = null; S.payMethod = 'online'; S.cart = []; go('place'); };
 window.startOrderProduct = pid => {
   const p = (S.cache.products || []).find(x => x.id === pid);
   if (!p) return;
-  S.cache.addr = null;
+  S.cache.addr = null; S.payMethod = 'online';
   S.cart = [{ productId: p.id, name: p.name, spec: p.specs[0].name, price: p.specs[0].price, qty: 1, img: p.img, stock: p.specs[0].stock }];
   go('place');
 };
 async function renderPlace(page) {
   const [custRes, prodRes, home] = await Promise.all([api('/api/sales/customers'), api('/api/sales/products'), api('/api/home')]);
   S.cache.customers = custRes.list; S.cache.products = prodRes.list;
+  S.cache.freeFreight = Number(home.settings.freeFreight || 99); S.cache.freightFee = Number(home.settings.freight || 8);
   const customers = custRes.list;
   if (!customers.length) {
     page.innerHTML = `<div class="empty card"><span class="ico">👥</span>还没有客户，先新增客户再代客下单<div style="margin-top:16px"><button class="btn btn-primary" onclick="openCustomer()">新增客户</button></div></div>`;
@@ -249,6 +265,7 @@ async function renderPlace(page) {
   }
   if (!S.orderCustomer || !customers.some(c => c.id === S.orderCustomer)) S.orderCustomer = customers[0].id;
   const customer = customers.find(c => c.id === S.orderCustomer);
+  if (S.payMethod === 'monthly' && customer.monthlyEnabled !== true) S.payMethod = 'online';
   if (!S.cache.addr) S.cache.addr = { name: customer.name, phone: customer.phone, region: customer.region || '', detail: customer.detail || '' };
   const addr = S.cache.addr;
   const subtotal = S.cart.reduce((s, i) => s + i.price * i.qty, 0);
@@ -260,13 +277,20 @@ async function renderPlace(page) {
       <div class="field" style="margin-bottom:10px"><label>选择客户</label>
         <select id="poCustomer" onchange="changeOrderCustomer(this.value)">${customers.map(c => `<option value="${c.id}" ${c.id === customer.id ? 'selected' : ''}>${esc(c.name)}${c.company ? ' · ' + esc(c.company) : ''} · ${esc(c.phone)}</option>`).join('')}</select>
       </div>
-      <div class="mini-note">客户归属：${esc(customer.name)} · 累计 ${customer.orderCount} 单 ${money(customer.amount)} · ${customer.licenseExpiry ? '许可证到期 ' + customer.licenseExpiry : '未登记许可证'}</div>
+      <div class="mini-note">客户归属：${esc(customer.name)} · 累计 ${customer.orderCount} 单 ${money(customer.amount)} · ${customer.licenseExpiry ? '许可证到期 ' + customer.licenseExpiry : '未登记许可证'}<br>支付方式：${customer.monthlyEnabled ? `月结 · 可用 ${money(customer.creditAvailable)} / 额度 ${money(customer.creditLimit)} · 账期 ${customer.creditDays} 天` : '现款结算'}</div>
       <div class="address-grid" style="margin-top:14px">
         <div class="field"><label>收货人</label><input id="poName" value="${esc(addr.name || '')}"></div>
         <div class="field"><label>收货手机号</label><input id="poPhone" value="${esc(addr.phone || '')}"></div>
       </div>
       <div class="field"><label>区域</label><input id="poRegion" value="${esc(addr.region || '')}" placeholder="如 广东省 湛江市 赤坎区"></div>
       <div class="field"><label>详细地址</label><input id="poDetail" value="${esc(addr.detail || '')}" placeholder="街道、门牌、楼层"></div>
+      <div class="field"><label>支付方式</label>
+        <div class="pay-tabs" id="soPay">
+          <button type="button" class="pay-tab ${S.payMethod === 'online' ? 'on' : ''}" data-pay="online" onclick="setSalesPay('online')"><b>现款结算</b><small>下单后由业务员登记收款</small></button>
+          ${customer.monthlyEnabled ? `<button type="button" class="pay-tab ${S.payMethod === 'monthly' ? 'on' : ''}" data-pay="monthly" onclick="setSalesPay('monthly')"><b>月结</b><small>可用 ${money(customer.creditAvailable)} · 账期 ${customer.creditDays} 天</small></button>` : ''}
+        </div>
+      </div>
+      <p class="pay-hint" id="soPayHint">${S.payMethod === 'monthly' ? '提交后先发货，客户在账期内回款，回款后释放额度' : '客户付款后，在订单页登记收款'}</p>
       <div class="field"><label>订单备注</label><textarea id="poRemark" placeholder="送货时间、拆零要求等（选填）"></textarea></div>
     </div>
     <div class="panel mt16" style="padding:0;overflow:hidden">
@@ -297,15 +321,33 @@ async function renderPlace(page) {
         <div class="panel-head"><h3>订单汇总</h3></div>
         <div class="order-line"><span>商品合计</span><span>${money(subtotal)}</span></div>
         <div class="order-line"><span>运费</span><span>${freight ? money(freight) : '包邮'}</span></div>
-        <div class="order-line total"><span>应付金额</span><b>${money(total)}</b></div>
+        <div class="order-line"><span>支付方式</span><b id="soPayText">${S.payMethod === 'monthly' ? `月结（${customer.creditDays} 天）` : '现款结算'}</b></div>
+        <div class="order-line total"><span id="soTotalLabel">${S.payMethod === 'monthly' ? '本单月结金额' : '应付金额'}</span><b>${money(total)}</b></div>
         <button class="btn btn-primary" style="width:100%;margin-top:16px" onclick="submitSalesOrder()">提交代客订单</button>
-        <p class="muted" style="font-size:11.5px;margin-top:10px;text-align:center">提交后进入“待付款”，收款后在订单页登记</p>
+        <p class="muted" id="soSubmitHint" style="font-size:11.5px;margin-top:10px;text-align:center">${S.payMethod === 'monthly' ? '提交后进入月结待发货，回款后在订单页登记' : '提交后进入待付款，收款后在订单页登记'}</p>
       </div>
     </div>`;
 }
 window.filterProductPick = keyword => {
   const k = String(keyword || '').trim().toLowerCase();
   document.querySelectorAll('tbody tr[data-pname]').forEach(tr => { tr.style.display = tr.dataset.pname.includes(k) ? '' : 'none'; });
+};
+window.setSalesPay = method => {
+  const customer = (S.cache.customers || []).find(c => c.id === S.orderCustomer);
+  if (!customer) return;
+  captureAddress();
+  const subtotal = S.cart.reduce((s, i) => s + i.price * i.qty, 0);
+  const freight = subtotal >= (S.cache.freeFreight || 99) ? 0 : (S.cache.freightFee || 8);
+  if (method === 'monthly') {
+    if (customer.monthlyEnabled !== true) return toast('该客户未开通月结');
+    if (subtotal + freight > customer.creditAvailable) return toast(`月结可用额度不足，还差 ${money(subtotal + freight - customer.creditAvailable)}`);
+  }
+  S.payMethod = method;
+  document.querySelectorAll('#soPay .pay-tab').forEach(el => el.classList.toggle('on', el.dataset.pay === method));
+  $('#soPayText').textContent = method === 'monthly' ? `月结（${customer.creditDays} 天）` : '现款结算';
+  $('#soTotalLabel').textContent = method === 'monthly' ? '本单月结金额' : '应付金额';
+  $('#soPayHint').textContent = method === 'monthly' ? '提交后先发货，客户在账期内回款，回款后释放额度' : '客户付款后，在订单页登记收款';
+  $('#soSubmitHint').textContent = method === 'monthly' ? '提交后进入月结待发货，回款后在订单页登记' : '提交后进入待付款，收款后在订单页登记';
 };
 window.addToCart = pid => {
   captureAddress();
@@ -348,8 +390,10 @@ window.submitSalesOrder = async () => {
   const address = { name: $('#poName').value.trim(), phone: $('#poPhone').value.trim(), region: $('#poRegion').value.trim(), detail: $('#poDetail').value.trim() };
   if (!address.name || !address.phone || !address.region || !address.detail) return toast('请填写完整的收货地址');
   try {
-    const d = await api('/api/sales/orders', { method: 'POST', body: { customerId: S.orderCustomer, items: S.cart.map(i => ({ productId: i.productId, spec: i.spec, qty: i.qty })), address, remark: $('#poRemark').value.trim() } });
-    S.cart = []; S.cache.addr = null; toast(`订单已提交：${d.order.orderNo}`);
+    const d = await api('/api/sales/orders', { method: 'POST', body: { customerId: S.orderCustomer, items: S.cart.map(i => ({ productId: i.productId, spec: i.spec, qty: i.qty })), address, remark: $('#poRemark').value.trim(), paymentMethod: S.payMethod } });
+    const monthly = d.order.paymentMethod === 'monthly';
+    S.cart = []; S.cache.addr = null; S.payMethod = 'online';
+    toast(monthly ? `月结订单已提交：${d.order.orderNo}` : `订单已提交：${d.order.orderNo}`);
     S.tab.orders = 'all'; go('orders');
   } catch (e) { toast(e.message); }
 };
@@ -357,20 +401,21 @@ window.submitSalesOrder = async () => {
 /* ---------------- 我的订单 ---------------- */
 async function renderOrders(page) {
   const tab = S.tab.orders || 'all';
-  const qs = new URLSearchParams({ status: tab });
+  const qs = new URLSearchParams();
+  if (tab === 'monthly') qs.set('settle', 'unpaid'); else qs.set('status', tab);
   const d = await api('/api/sales/orders?' + qs.toString());
-  page.innerHTML = setTabs('orders', [['all', '全部'], ['pending', '待付款'], ['paid', '待发货'], ['shipped', '已发货'], ['completed', '已完成']], tab) + `
+  page.innerHTML = setTabs('orders', [['all', '全部'], ['pending', '待付款'], ['paid', '待发货'], ['monthly', '月结未结'], ['shipped', '已发货'], ['completed', '已完成']], tab) + `
     <div class="toolbar"><span class="muted" style="font-size:12.5px">共 ${d.list.length} 笔订单</span><span class="grow"></span><button class="btn btn-sm btn-primary" onclick="go('place')">＋ 代客下单</button></div>
     <div class="panel" style="padding:0;overflow:hidden">
-      <table><thead><tr><th>订单号</th><th>客户</th><th>商品</th><th>实付</th><th>状态</th><th>时间</th><th style="text-align:right">操作</th></tr></thead>
+      <table><thead><tr><th>订单号</th><th>客户</th><th>商品</th><th>金额</th><th>状态</th><th>时间</th><th style="text-align:right">操作</th></tr></thead>
       <tbody>${d.list.map(o => `<tr>
         <td><b>${o.orderNo}</b><br><small class="muted">${o.items.reduce((s, i) => s + i.qty, 0)} 件</small></td>
         <td>${esc(o.customerName || (o.address || {}).name || '-')}<br><small class="muted">${esc((o.address || {}).phone || '')}</small></td>
         <td><div class="goods-cell"><img src="${o.items[0].img}"><div>${esc(o.items[0].name)}${o.items.length > 1 ? `<br><small class="muted">等 ${o.items.length} 种</small>` : ''}</div></div></td>
-        <td class="price">${money(o.pay)}</td>
-        <td><span class="badge ${STATUS_BADGE[o.status]}">${STATUS_TEXT[o.status]}</span></td>
+        <td class="price">${money(o.pay)}${o.paymentMethod === 'monthly' ? '<br><small class="credit-ok">月结</small>' : ''}</td>
+        <td><span class="badge ${orderBadgeClass(o)}">${orderStatusText(o)}</span></td>
         <td class="muted">${fmtDate(o.createdAt)}</td>
-        <td style="text-align:right"><button class="btn btn-sm btn-ghost" onclick="viewSalesOrder(${o.id})">详情</button>${o.status === 'pending' ? `<button class="btn btn-sm btn-primary" onclick="markPaid(${o.id})">登记收款</button>` : ''}</td>
+        <td style="text-align:right"><button class="btn btn-sm btn-ghost" onclick="viewSalesOrder(${o.id})">详情</button>${o.status === 'pending' ? `<button class="btn btn-sm btn-primary" onclick="markPaid(${o.id})">登记收款</button>` : ''}${o.paymentMethod === 'monthly' && o.paymentStatus !== 'settled' && o.status !== 'cancelled' ? `<button class="btn btn-sm btn-primary" onclick="markSettled(${o.id})">登记回款</button>` : ''}</td>
       </tr>`).join('') || '<tr><td colspan="7"><div class="empty">暂无相关订单</div></td></tr>'}</tbody></table>
     </div>`;
 }
@@ -378,18 +423,26 @@ window.viewSalesOrder = async id => {
   try {
     const { order: o } = await api('/api/sales/orders/' + id);
     openModal(`<h3>订单 ${o.orderNo}</h3>
-      <p class="muted">${STATUS_TEXT[o.status]} · ${fmtTime(o.createdAt)} · 业务员 ${esc(o.salesName || '')}</p>
+      <p class="muted">${orderStatusText(o)} · ${fmtTime(o.createdAt)} · 业务员 ${esc(o.salesName || '')}</p>
       <div style="margin:16px 0">${o.items.map(i => `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f1f4f2"><span>${esc(i.name)} <small class="muted">${esc(i.spec)} × ${i.qty}</small></span><span class="price">${money(i.price * i.qty)}</span></div>`).join('')}</div>
-      <table style="font-size:12.5px"><tr><td>商品合计</td><td style="text-align:right">${money(o.total)}</td></tr><tr><td>运费</td><td style="text-align:right">${money(o.freight)}</td></tr><tr><td><b>应付</b></td><td style="text-align:right" class="price"><b>${money(o.pay)}</b></td></tr></table>
+      <table style="font-size:12.5px"><tr><td>商品合计</td><td style="text-align:right">${money(o.total)}</td></tr><tr><td>运费</td><td style="text-align:right">${money(o.freight)}</td></tr><tr><td>支付方式</td><td style="text-align:right">${o.paymentMethod === 'monthly' ? '月结' : '现款'}</td></tr><tr><td><b>${o.paymentMethod === 'monthly' ? '月结金额' : '应付'}</b></td><td style="text-align:right" class="price"><b>${money(o.pay)}</b></td></tr></table>
+      ${o.paymentMethod === 'monthly' ? `<p class="credit-note">${o.paymentStatus === 'settled' ? `月结已回款（${fmtDate(o.settledAt)}）` : `月结未结 · 应结日期 ${fmtDate(o.settlementDueAt)}`}</p>` : ''}
       <p style="margin-top:14px;font-size:12.5px"><b>收货：</b>${esc((o.address || {}).name || '')} ${esc((o.address || {}).phone || '')}<br><span class="muted">${esc((o.address || {}).region || '')} ${esc((o.address || {}).detail || '')}</span></p>
       ${o.remark ? `<p style="font-size:12.5px;margin-top:8px"><b>备注：</b>${esc(o.remark)}</p>` : ''}
       ${o.express ? `<p style="font-size:12.5px;margin-top:8px"><b>物流：</b>${esc(o.express.company)} ${esc(o.express.no)}</p>` : ''}
-      ${o.status === 'pending' ? `<button class="btn btn-primary" style="width:100%;margin-top:14px" onclick="markPaid(${o.id})">登记收款</button><button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="cancelSalesOrder(${o.id})">取消订单</button>` : ''}`);
+      ${o.status === 'pending' ? `<button class="btn btn-primary" style="width:100%;margin-top:14px" onclick="markPaid(${o.id})">登记收款</button><button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="cancelSalesOrder(${o.id})">取消订单</button>` : ''}
+      ${o.paymentMethod === 'monthly' && o.paymentStatus !== 'settled' && o.status !== 'cancelled' ? `<button class="btn btn-primary" style="width:100%;margin-top:14px" onclick="markSettled(${o.id})">登记月结回款</button>` : ''}
+      ${o.paymentMethod === 'monthly' && o.paymentStatus !== 'settled' && o.status === 'paid' ? `<button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="cancelSalesOrder(${o.id})">取消订单</button>` : ''}`);
   } catch (e) { toast(e.message); }
 };
 window.markPaid = async id => {
   if (!confirm('确认已收到该笔货款？')) return;
   try { await api('/api/sales/orders/' + id + '/paid', { method: 'POST' }); closeModal(); toast('已登记收款'); renderPage(); }
+  catch (e) { toast(e.message); }
+};
+window.markSettled = async id => {
+  if (!confirm('确认该笔月结账款已回款？')) return;
+  try { await api('/api/sales/orders/' + id + '/settle', { method: 'POST' }); closeModal(); toast('月结回款已登记'); renderPage(); }
   catch (e) { toast(e.message); }
 };
 window.cancelSalesOrder = async id => {

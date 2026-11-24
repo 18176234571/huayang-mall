@@ -335,3 +335,15 @@ h1,h2,h3,h4{font-weight:600;letter-spacing:.2px}
   .detail{padding:18px}
   .buy-row .btn{flex:1;min-width:0}
 }
+
+/* 月结支付 */
+.pay-choices{display:grid;gap:10px}
+.pay-choice{display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid #e6eae7;border-radius:10px;cursor:pointer;background:#fff;transition:.18s}
+.pay-choice:hover{border-color:#9bcdbf}
+.pay-choice.on{border-color:#0f6b57;background:#f3faf7;box-shadow:0 0 0 1px #0f6b57 inset}
+.pay-choice .dot{width:16px;height:16px;border-radius:50%;border:2px solid #c9d3ce;flex:0 0 auto;position:relative}
+.pay-choice.on .dot{border-color:#0f6b57;background:#0f6b57}
+.pay-choice.on .dot:after{content:"";position:absolute;left:4px;top:1px;width:5px;height:9px;border:2px solid #fff;border-top:0;border-left:0;transform:rotate(42deg)}
+.pay-choice b{font-size:14px;display:block}
+.pay-choice small{display:block;color:#7d8b85;font-size:12px;margin-top:3px;line-height:1.5}
+.credit-note{margin-top:14px;background:#fff8e8;border:1px solid #f4dfae;color:#8a5b10;padding:10px 14px;border-radius:9px;font-size:12.5px}

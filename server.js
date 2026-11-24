@@ -141,8 +141,8 @@ function seedDB() {
 
   const users = [
     { id: 'u1', phone: '13800000000', name: '平台管理员', pwd: hash('admin123'), role: 'admin', points: 0, createdAt: nowISO(-120) },
-    { id: 'u2', phone: '13900000001', name: '陈先生', pwd: hash('123456'), role: 'user', points: 1200, createdAt: nowISO(-60), salesId: 'u4', company: '湛江华阳诊所', licenseNo: '粤PDY00001', licenseExpiry: nowISO(180).slice(0, 10), region: '广东省 湛江市 赤坎区', detail: '海田路 88 号华阳大厦 6 楼' },
-    { id: 'u3', phone: '13700000002', name: '李女士', pwd: hash('123456'), role: 'user', points: 680, createdAt: nowISO(-15), salesId: 'u4', company: '霞山惠民药房', licenseNo: '粤DA00002', licenseExpiry: nowISO(90).slice(0, 10), region: '广东省 湛江市 霞山区', detail: '人民大道南 12 号 3 栋 502' },
+    { id: 'u2', phone: '13900000001', name: '陈先生', pwd: hash('123456'), role: 'user', points: 1200, createdAt: nowISO(-60), salesId: 'u4', company: '湛江华阳诊所', licenseNo: '粤PDY00001', licenseExpiry: nowISO(180).slice(0, 10), region: '广东省 湛江市 赤坎区', detail: '海田路 88 号华阳大厦 6 楼', monthlyEnabled: true, creditLimit: 5000, creditDays: 30 },
+    { id: 'u3', phone: '13700000002', name: '李女士', pwd: hash('123456'), role: 'user', points: 680, createdAt: nowISO(-15), salesId: 'u4', company: '霞山惠民药房', licenseNo: '粤DA00002', licenseExpiry: nowISO(90).slice(0, 10), region: '广东省 湛江市 霞山区', detail: '人民大道南 12 号 3 栋 502', monthlyEnabled: true, creditLimit: 8000, creditDays: 30 },
     { id: 'u4', phone: '13600000004', name: '业务员小李', pwd: hash('123456'), role: 'sales', points: 0, salesCode: 'S001', commissionRate: 3, region: '湛江市区', active: true, createdAt: nowISO(-45) }
   ];
 
@@ -167,6 +167,7 @@ function seedDB() {
       items, total: +total.toFixed(2), freight, discount, pay: +(total + freight - discount).toFixed(2),
       address: extra.address || addresses[userId][0], remark: extra.remark || '',
       createdAt: nowISO(-daysAgo), paidAt: status === 'pending' ? null : nowISO(-daysAgo),
+      paymentMethod: 'online', paymentStatus: status === 'pending' || status === 'cancelled' ? 'unpaid' : 'paid',
       express: extra.express || null,
       timeline: [{ time: nowISO(-daysAgo), text: '订单提交成功' }]
     };
@@ -305,6 +306,38 @@ function orderTotal(items, coupon) {
   return { total: round(total), freight: round(freight), discount: round(discount), pay: round(Math.max(0, total + freight - discount)) };
 }
 
+/* ------------------------------------------------------------------ 月结账期 */
+function orderPaymentMethod(order) { return order && order.paymentMethod === 'monthly' ? 'monthly' : 'online'; }
+function isMonthlyUnsettled(order) {
+  return Boolean(order && order.status !== 'cancelled' && orderPaymentMethod(order) === 'monthly' && order.paymentStatus !== 'settled');
+}
+function isOrderPaid(order) {
+  if (!order || order.status === 'cancelled') return false;
+  if (orderPaymentMethod(order) === 'monthly') return order.paymentStatus === 'settled';
+  return ['paid', 'shipped', 'completed'].includes(order.status);
+}
+function isOrderReceivable(order) {
+  if (!order || order.status === 'cancelled') return false;
+  if (orderPaymentMethod(order) === 'monthly') return order.paymentStatus !== 'settled';
+  return order.status === 'pending';
+}
+function monthlyOutstanding(userId) {
+  return round(db.orders.filter(o => o.userId === userId && isMonthlyUnsettled(o)).reduce((s, o) => s + o.pay, 0));
+}
+function creditInfo(user) {
+  const creditLimit = round(Math.max(0, Number(user.creditLimit || 0)));
+  const creditDays = Math.max(0, Math.min(180, Math.round(Number(user.creditDays == null ? 30 : user.creditDays))));
+  const creditUsed = monthlyOutstanding(user.id);
+  return { monthlyEnabled: user.monthlyEnabled === true, creditLimit, creditDays, creditUsed, creditAvailable: round(Math.max(0, creditLimit - creditUsed)) };
+}
+function publicUserView(user) {
+  return {
+    id: user.id, phone: user.phone, name: user.name, role: user.role, points: user.points,
+    salesId: user.salesId || '', salesCode: user.salesCode || '', commissionRate: user.commissionRate || 0,
+    ...creditInfo(user)
+  };
+}
+
 /* ------------------------------------------------------------------ 业务员 */
 function salesGuard(req, res) {
   const user = currentUser(req);
@@ -346,10 +379,10 @@ function salesStats(sales, month) {
     const t = new Date(o.createdAt).getTime();
     return t >= start.getTime() && t < end.getTime();
   });
-  const paidOrders = orders.filter(o => ['paid', 'shipped', 'completed'].includes(o.status));
+  const paidOrders = orders.filter(isOrderPaid);
   const amount = round(orders.reduce((s, o) => s + o.pay, 0));
   const paidAmount = round(paidOrders.reduce((s, o) => s + o.pay, 0));
-  const pendingAmount = round(orders.filter(o => o.status === 'pending').reduce((s, o) => s + o.pay, 0));
+  const pendingAmount = round(orders.filter(isOrderReceivable).reduce((s, o) => s + o.pay, 0));
   const rate = Number(sales.commissionRate || 0);
   const commission = round(paidAmount * rate / 100);
   const byCustomer = {};
@@ -457,13 +490,13 @@ route('POST', '/api/auth/login', async (req, res) => {
   const { phone, password } = await readBody(req);
   const user = db.users.find(u => u.phone === phone);
   if (!user || user.pwd !== hash(password || '')) return fail(res, '手机号或密码错误');
-  ok(res, { token: signToken(user), user: { id: user.id, phone: user.phone, name: user.name, role: user.role, points: user.points, salesId: user.salesId || '', salesCode: user.salesCode || '', commissionRate: user.commissionRate || 0 } });
+  ok(res, { token: signToken(user), user: publicUserView(user) });
 });
 
 route('GET', '/api/auth/me', (req, res) => {
   const user = currentUser(req);
   if (!user) return fail(res, '请先登录', 401);
-  ok(res, { user: { id: user.id, phone: user.phone, name: user.name, role: user.role, points: user.points, salesId: user.salesId || '', salesCode: user.salesCode || '', commissionRate: user.commissionRate || 0 } });
+  ok(res, { user: publicUserView(user) });
 });
 
 route('POST', '/api/auth/password', async (req, res) => {
@@ -658,13 +691,23 @@ route('POST', '/api/orders', async (req, res) => {
   }
 
   const calc = orderTotal(items, coupon);
+  const paymentMethod = b.paymentMethod === 'monthly' ? 'monthly' : 'online';
+  let settlementDueAt = null;
+  if (paymentMethod === 'monthly') {
+    if (user.monthlyEnabled !== true) return fail(res, '该客户未开通月结，请选择在线支付', 400);
+    const credit = creditInfo(user);
+    if (credit.creditLimit <= 0) return fail(res, '该客户未设置月结额度', 400);
+    if (calc.pay > credit.creditAvailable) return fail(res, `月结额度不足，可用 ${credit.creditAvailable.toFixed(2)} 元`, 400);
+    settlementDueAt = new Date(Date.now() + credit.creditDays * 86400000).toISOString();
+  }
   const id = db.seq.order++;
   const order = {
-    id, orderNo: genOrderNo(id), userId: user.id, status: 'pending', items,
+    id, orderNo: genOrderNo(id), userId: user.id, status: paymentMethod === 'monthly' ? 'paid' : 'pending', items,
     total: calc.total, freight: calc.freight, discount: calc.discount, pay: calc.pay,
     address: addr, remark: b.remark || '', createdAt: new Date().toISOString(), paidAt: null,
+    paymentMethod, paymentStatus: 'unpaid', settlementDueAt,
     salesId: user.salesId || '', salesName: (salesById(user.salesId) || {}).name || '', createdBy: 'customer',
-    express: null, timeline: [{ time: new Date().toISOString(), text: '订单提交成功' }]
+    express: null, timeline: [{ time: new Date().toISOString(), text: paymentMethod === 'monthly' ? `月结订单提交（账期 ${creditInfo(user).creditDays} 天）` : '订单提交成功' }]
   };
   // 扣库存
   for (const it of items) {
@@ -702,7 +745,7 @@ route('POST', '/api/orders/:id/pay', (req, res, p) => {
   const order = db.orders.find(o => o.id === Number(p.id) && o.userId === user.id);
   if (!order) return fail(res, '订单不存在', 404);
   if (order.status !== 'pending') return fail(res, '当前订单状态不支持支付');
-  order.status = 'paid'; order.paidAt = new Date().toISOString();
+  order.status = 'paid'; order.paymentStatus = 'paid'; order.paidAt = new Date().toISOString();
   order.timeline.push({ time: order.paidAt, text: '支付成功（模拟支付）' });
   const u = db.users.find(x => x.id === user.id);
   if (u) u.points = (u.points || 0) + Math.floor(order.pay);
@@ -777,6 +820,8 @@ route('GET', '/api/admin/overview', (req, res) => {
       totalSales: round(totalSales), totalOrders: db.orders.length,
       pendingPay: db.orders.filter(o => o.status === 'pending').length,
       pendingShip: db.orders.filter(o => o.status === 'paid').length,
+      monthlyUnpaid: db.orders.filter(isMonthlyUnsettled).length,
+      monthlyUnpaidAmount: round(db.orders.filter(isMonthlyUnsettled).reduce((s, o) => s + o.pay, 0)),
       customers: db.users.filter(u => u.role === 'user').length,
       lowStock: db.products.filter(p => p.stock < 100).length,
       products: db.products.length
@@ -841,7 +886,8 @@ route('POST', '/api/admin/products/:id/status', async (req, res, p) => {
 route('GET', '/api/admin/orders', (req, res, p, query) => {
   if (!adminGuard(req, res)) return;
   let list = db.orders.slice();
-  if (query.status && query.status !== 'all') list = list.filter(o => o.status === query.status);
+  if (query.status === 'monthly') list = list.filter(isMonthlyUnsettled);
+  else if (query.status && query.status !== 'all') list = list.filter(o => o.status === query.status);
   if (query.keyword) list = list.filter(o => o.orderNo.includes(query.keyword) || (o.address && o.address.name.includes(query.keyword)));
   if (query.salesId) list = list.filter(o => orderSalesId(o) === query.salesId);
   ok(res, { list: list.map(o => ({ ...o, salesId: orderSalesId(o), salesName: o.salesName || orderSalesName(o) })) });
@@ -856,6 +902,19 @@ route('POST', '/api/admin/orders/:id/ship', async (req, res, p) => {
   order.status = 'shipped';
   order.express = { company: b.company || '顺丰速运', no: b.no || ('SF' + Date.now()) };
   order.timeline.push({ time: new Date().toISOString(), text: `已发货：${order.express.company} ${order.express.no}` });
+  save(); ok(res, { order });
+});
+
+route('POST', '/api/admin/orders/:id/settle', (req, res, p) => {
+  if (!adminGuard(req, res)) return;
+  const order = db.orders.find(o => o.id === Number(p.id));
+  if (!order) return fail(res, '订单不存在', 404);
+  if (!isMonthlyUnsettled(order)) return fail(res, '该订单不是未结月结订单', 400);
+  const now = new Date().toISOString();
+  order.paymentStatus = 'settled';
+  order.settledAt = now;
+  order.paidAt = now;
+  order.timeline.push({ time: now, text: '月结回款已登记' });
   save(); ok(res, { order });
 });
 
@@ -913,9 +972,25 @@ route('GET', '/api/admin/users', (req, res) => {
   const list = db.users.map(u => {
     const orders = db.orders.filter(o => o.userId === u.id && o.status !== 'cancelled');
     const sales = salesById(u.salesId);
-    return { id: u.id, phone: u.phone, name: u.name, role: u.role, points: u.points, orderCount: orders.length, amount: round(orders.reduce((s, o) => s + o.pay, 0)), createdAt: u.createdAt, company: u.company || '', licenseNo: u.licenseNo || '', licenseExpiry: u.licenseExpiry || '', salesId: u.salesId || '', salesName: sales ? sales.name : '' };
+    return { id: u.id, phone: u.phone, name: u.name, role: u.role, points: u.points, orderCount: orders.length, amount: round(orders.reduce((s, o) => s + o.pay, 0)), createdAt: u.createdAt, company: u.company || '', licenseNo: u.licenseNo || '', licenseExpiry: u.licenseExpiry || '', salesId: u.salesId || '', salesName: sales ? sales.name : '', ...creditInfo(u) };
   });
   ok(res, { list });
+});
+
+route('PUT', '/api/admin/customers/:id/credit', async (req, res, p) => {
+  if (!adminGuard(req, res)) return;
+  const customer = db.users.find(u => u.id === p.id && u.role === 'user');
+  if (!customer) return fail(res, '客户不存在', 404);
+  const b = await readBody(req);
+  const limit = round(Number(b.creditLimit == null ? (customer.creditLimit || 0) : b.creditLimit));
+  const days = Math.round(Number(b.creditDays == null ? (customer.creditDays == null ? 30 : customer.creditDays) : b.creditDays));
+  if (!Number.isFinite(limit) || limit < 0 || limit > 1000000) return fail(res, '月结额度应在 0–1000000 元之间', 400);
+  if (!Number.isFinite(days) || days < 0 || days > 180) return fail(res, '账期应在 0–180 天之间', 400);
+  customer.monthlyEnabled = b.monthlyEnabled === true;
+  customer.creditLimit = limit;
+  customer.creditDays = days;
+  save();
+  ok(res, { customer: { id: customer.id, name: customer.name, phone: customer.phone, ...creditInfo(customer) } });
 });
 
 route('GET', '/api/admin/settings', (req, res) => {
@@ -945,7 +1020,7 @@ function salesCustomerView(c) {
   return {
     id: c.id, name: c.name, phone: c.phone, company: c.company || '', licenseNo: c.licenseNo || '',
     licenseExpiry: c.licenseExpiry || '', region: c.region || '', detail: c.detail || '', note: c.note || '',
-    points: c.points || 0, createdAt: c.createdAt, ...summary
+    points: c.points || 0, createdAt: c.createdAt, ...summary, ...creditInfo(c)
   };
 }
 function customerAddress(c) {
@@ -1087,15 +1162,25 @@ route('POST', '/api/sales/orders', async (req, res) => {
   if (!addr.name || !addr.phone || !addr.region || !addr.detail) return fail(res, '请填写完整的收货地址');
   if (!/^1\d{10}$/.test(String(addr.phone))) return fail(res, '收货人手机号格式不正确');
   const calc = orderTotal(items, null);
+  const paymentMethod = b.paymentMethod === 'monthly' ? 'monthly' : 'online';
+  let settlementDueAt = null;
+  if (paymentMethod === 'monthly') {
+    if (customer.monthlyEnabled !== true) return fail(res, '该客户未开通月结', 400);
+    const credit = creditInfo(customer);
+    if (credit.creditLimit <= 0) return fail(res, '该客户未设置月结额度', 400);
+    if (calc.pay > credit.creditAvailable) return fail(res, `月结额度不足，可用 ${credit.creditAvailable.toFixed(2)} 元`, 400);
+    settlementDueAt = new Date(Date.now() + credit.creditDays * 86400000).toISOString();
+  }
   const id = db.seq.order++;
   const now = new Date().toISOString();
   const order = {
-    id, orderNo: genOrderNo(id), userId: customer.id, status: 'pending', items,
+    id, orderNo: genOrderNo(id), userId: customer.id, status: paymentMethod === 'monthly' ? 'paid' : 'pending', items,
     total: calc.total, freight: calc.freight, discount: calc.discount, pay: calc.pay,
     address: { name: String(addr.name).trim(), phone: String(addr.phone).trim(), region: String(addr.region).trim(), detail: String(addr.detail).trim() },
     remark: b.remark || '业务员代客下单', createdAt: now, paidAt: null,
+    paymentMethod, paymentStatus: 'unpaid', settlementDueAt,
     salesId: s.id, salesName: s.name, createdBy: 'sales',
-    express: null, timeline: [{ time: now, text: `业务员 ${s.name} 代客下单` }]
+    express: null, timeline: [{ time: now, text: paymentMethod === 'monthly' ? `业务员 ${s.name} 代客下单（月结 ${creditInfo(customer).creditDays} 天）` : `业务员 ${s.name} 代客下单` }]
   };
   for (const it of items) {
     const product = db.products.find(x => x.id === it.productId);
@@ -1109,7 +1194,8 @@ route('POST', '/api/sales/orders', async (req, res) => {
 route('GET', '/api/sales/orders', (req, res, p, query) => {
   const s = salesGuard(req, res); if (!s) return;
   let list = salesOrdersFor(s.id);
-  if (query.status && query.status !== 'all') list = list.filter(o => o.status === query.status);
+  if (query.settle === 'unpaid') list = list.filter(isMonthlyUnsettled);
+  else if (query.status && query.status !== 'all') list = list.filter(o => o.status === query.status);
   if (query.customerId) list = list.filter(o => o.userId === query.customerId);
   if (query.keyword) {
     const k = String(query.keyword).trim();
@@ -1130,10 +1216,23 @@ route('POST', '/api/sales/orders/:id/paid', (req, res, p) => {
   const order = db.orders.find(o => o.id === Number(p.id) && orderSalesId(o) === s.id);
   if (!order) return fail(res, '订单不存在', 404);
   if (order.status !== 'pending') return fail(res, '仅待付款订单可登记收款');
-  order.status = 'paid'; order.paidAt = new Date().toISOString();
+  order.status = 'paid'; order.paymentStatus = 'paid'; order.paidAt = new Date().toISOString();
   order.timeline.push({ time: order.paidAt, text: `业务员 ${s.name} 登记收款` });
   const customer = db.users.find(u => u.id === order.userId);
   if (customer) customer.points = (customer.points || 0) + Math.floor(order.pay);
+  save(); ok(res, { order: salesOrderView(order) });
+});
+
+route('POST', '/api/sales/orders/:id/settle', (req, res, p) => {
+  const s = salesGuard(req, res); if (!s) return;
+  const order = db.orders.find(o => o.id === Number(p.id) && orderSalesId(o) === s.id);
+  if (!order) return fail(res, '订单不存在', 404);
+  if (!isMonthlyUnsettled(order)) return fail(res, '该订单不是未结月结订单', 400);
+  const now = new Date().toISOString();
+  order.paymentStatus = 'settled';
+  order.settledAt = now;
+  order.paidAt = now;
+  order.timeline.push({ time: now, text: `业务员 ${s.name} 登记月结回款` });
   save(); ok(res, { order: salesOrderView(order) });
 });
 
@@ -1141,7 +1240,8 @@ route('POST', '/api/sales/orders/:id/cancel', (req, res, p) => {
   const s = salesGuard(req, res); if (!s) return;
   const order = db.orders.find(o => o.id === Number(p.id) && orderSalesId(o) === s.id);
   if (!order) return fail(res, '订单不存在', 404);
-  if (order.status !== 'pending') return fail(res, '仅待付款订单可取消');
+  const canCancel = order.status === 'pending' || (orderPaymentMethod(order) === 'monthly' && order.status === 'paid' && order.paymentStatus !== 'settled');
+  if (!canCancel) return fail(res, '当前订单状态不可取消');
   order.status = 'cancelled';
   order.timeline.push({ time: new Date().toISOString(), text: `业务员 ${s.name} 取消订单` });
   for (const it of order.items) {

@@ -145,3 +145,9 @@ td.table-ops .btn{margin-left:6px}
 
 @media (max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.grid-2{grid-template-columns:1fr}.sidebar{width:196px}}
 @media (max-width:820px){.sidebar{position:static;width:100%;min-height:auto}.shell{flex-direction:column}.content{margin-left:0}.kpi-grid{grid-template-columns:1fr 1fr}.page{padding:18px}}
+
+/* 月结账期 */
+.credit-text{display:inline-block;margin:3px 0 2px;color:#0f6b57;font-size:11px;line-height:1.45}
+.credit-switch{display:flex;align-items:center;gap:9px;font-size:13px;background:#f6faf8;border:1px solid #e2ede8;padding:11px 13px;border-radius:8px;cursor:pointer}
+.credit-switch input{width:16px;height:16px;accent-color:#0f6b57}
+.credit-note{margin-top:12px;background:#fff8e8;border:1px solid #f4dfae;color:#8a5b10;padding:9px 12px;border-radius:8px;font-size:12px}

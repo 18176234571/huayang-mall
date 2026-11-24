@@ -117,6 +117,16 @@ function productCard(p) {
 }
 
 const STATUS_TEXT = { pending: '待付款', paid: '待发货', shipped: '已发货', completed: '已完成', cancelled: '已取消' };
+function orderStatusText(o) {
+  const base = STATUS_TEXT[o.status] || o.status;
+  if (o.paymentMethod === 'monthly') {
+    if (o.paymentStatus === 'settled') return base + ' · 月结已结';
+    if (o.status === 'paid') return '月结待发货';
+    if (o.status === 'shipped') return '已发货 · 月结未结';
+    if (o.status === 'completed') return '已完成 · 月结未结';
+  }
+  return base;
+}
 
 /* ---------------- 首页 ---------------- */
 function renderHome() {
@@ -378,7 +388,7 @@ async function renderCheckout(mode) {
   if (!items.length) return `<div class="empty card"><span class="ico">📦</span>没有待结算的商品<a href="#/cart" style="display:inline-block;margin-top:16px">返回购物车</a></div>`;
   const total = items.reduce((s, i) => s + i.price * i.qty, 0);
   const freight = total >= 99 ? 0 : 8;
-  state.checkout = { mode, items, total, freight, couponId: '', addressId: (addrs.find(a => a.isDefault) || addrs[0] || {}).id || '' };
+  state.checkout = { mode, items, total, freight, couponId: '', addressId: (addrs.find(a => a.isDefault) || addrs[0] || {}).id || '', paymentMethod: 'online', creditAvailable: Number(state.user.creditAvailable || 0), creditDays: Number(state.user.creditDays || 30) };
   return `
   <div class="section-head" style="margin-top:18px"><h2>确认订单</h2></div>
   <div class="checkout-grid">
@@ -398,6 +408,13 @@ async function renderCheckout(mode) {
           <div><span class="muted">${money(i.price)} × ${i.qty}</span>&nbsp;&nbsp;<span class="price">${money(i.price * i.qty)}</span></div>
         </div>`).join('')}
       </div>
+      <div class="panel" style="margin-top:18px"><h3>支付方式</h3>
+        <div class="pay-choices" id="payChoices">
+          <label class="pay-choice on" data-pay="online"><span class="dot"></span><div><b>在线支付</b><small>提交后完成模拟付款，到账即进入待发货</small></div></label>
+          ${state.user.monthlyEnabled ? `<label class="pay-choice" data-pay="monthly"><span class="dot"></span><div><b>月结</b><small>可用额度 ${money(state.user.creditAvailable)} · 账期 ${state.user.creditDays} 天，先发货后结算</small></div></label>` : ''}
+        </div>
+        ${state.user.monthlyEnabled ? `<p class="muted" style="font-size:12px;margin-top:10px">月结订单会计入客户账期占用额度，回款后释放；超额度时需改用在线支付。</p>` : '<p class="muted" style="font-size:12px;margin-top:10px">当前账号为现款结算，如需月结请联系业务员申请开通。</p>'}
+      </div>
       <div class="panel" style="margin-top:18px">
         <h3>订单备注</h3>
         <div class="field"><textarea id="remark" placeholder="如有特殊配送要求请在此说明（选填）"></textarea></div>
@@ -409,9 +426,10 @@ async function renderCheckout(mode) {
       <div class="order-line"><span>运费</span><span>${freight ? money(freight) : '包邮'}</span></div>
       <div class="coupon-select" id="couponPick"><span>优惠券</span><span id="couponText">${coupons.length ? coupons.length + ' 张可用' : '暂无可用'} ›</span></div>
       <div class="order-line"><span>优惠</span><span id="discountText">-¥0.00</span></div>
+      <div class="order-line"><span>支付方式</span><span id="payMethodText">在线支付</span></div>
       <div class="order-line total"><span>应付金额</span><b id="payText">${money(total + freight)}</b></div>
       <button class="btn btn-primary btn-lg" style="width:100%;margin-top:18px" id="submitOrder">提交订单</button>
-      <p class="muted" style="font-size:12px;margin-top:12px;text-align:center">提交后进入模拟支付，用于完整演示交易流程</p>
+      <p class="muted" id="payHint" style="font-size:12px;margin-top:12px;text-align:center">提交后进入模拟支付，用于完整演示交易流程</p>
     </div>
   </div>`;
 }
@@ -422,6 +440,15 @@ function bindCheckout() {
     co.addressId = el.dataset.id;
     document.querySelectorAll('#addrList .addr').forEach(x => x.classList.remove('on'));
     el.classList.add('on');
+  });
+  document.querySelectorAll('#payChoices .pay-choice[data-pay]').forEach(el => el.onclick = () => {
+    const method = el.dataset.pay;
+    const due = co.total + co.freight - (co.discount || 0);
+    if (method === 'monthly' && due > co.creditAvailable) return toast(`月结可用额度不足，还差 ${money(due - co.creditAvailable)}`);
+    co.paymentMethod = method;
+    document.querySelectorAll('#payChoices .pay-choice').forEach(x => x.classList.toggle('on', x === el));
+    $('#payMethodText').textContent = method === 'monthly' ? `月结（${co.creditDays} 天）` : '在线支付';
+    $('#payHint').textContent = method === 'monthly' ? '提交后先发货，在账期内完成回款结算' : '提交后进入模拟支付，用于完整演示交易流程';
   });
   $('#couponPick').onclick = async () => {
     const { list } = await api('/api/coupons/mine');
@@ -448,13 +475,16 @@ function bindCheckout() {
   $('#submitOrder').onclick = async () => {
     if (!co.addressId) return toast('请选择收货地址');
     try {
-      const body = { addressId: co.addressId, couponId: co.couponId || null, remark: $('#remark').value.trim() };
+      const body = { addressId: co.addressId, couponId: co.couponId || null, remark: $('#remark').value.trim(), paymentMethod: co.paymentMethod };
       if (co.mode === 'buynow') body.items = co.items.map(i => ({ productId: i.productId, spec: i.spec, qty: i.qty }));
       const { order } = await api('/api/orders', { method: 'POST', body });
+      if (order.paymentMethod === 'monthly') {
+        try { const me = await api('/api/auth/me'); state.user = me.user; } catch {}
+      }
       await refreshCartCount();
       sessionStorage.removeItem('hy_buynow');
       location.hash = '#/order/' + order.id;
-      setTimeout(() => toast('订单已提交，请完成支付'), 300);
+      setTimeout(() => toast(order.paymentMethod === 'monthly' ? `月结订单已提交，账期 ${co.creditDays} 天` : '订单已提交，请完成支付'), 300);
     } catch (e) { toast(e.message); }
   };
 }
@@ -473,10 +503,10 @@ async function renderOrders(status = 'all') {
 function orderCard(o) {
   return `<div class="order-card">
     <div class="order-top"><span>订单号 ${o.orderNo}</span><span>${new Date(o.createdAt).toLocaleString('zh-CN', { hour12: false })}</span>
-      <span class="status status-${o.status}">${STATUS_TEXT[o.status]}</span></div>
+      <span class="status status-${o.status}">${orderStatusText(o)}</span></div>
     <div class="order-body">
       <div class="order-goods">${o.items.map(i => `<div class="ogood"><img src="${i.img}"><div><b style="font-size:13.5px">${esc(i.name)}</b><br><small>${esc(i.spec)} × ${i.qty}</small></div></div>`).join('')}</div>
-      <div class="order-amount"><small class="muted">实付</small><br><b>${money(o.pay)}</b><br><small class="muted">含运费 ${money(o.freight)}</small></div>
+      <div class="order-amount"><small class="muted">${o.paymentMethod === 'monthly' ? '月结金额' : '实付'}</small><br><b>${money(o.pay)}</b><br><small class="muted">含运费 ${money(o.freight)}</small></div>
     </div>
     <div class="order-actions">
       <button class="btn btn-sm btn-ghost" onclick="location.hash='#/order/${o.id}'">订单详情</button>
@@ -514,7 +544,7 @@ async function renderOrderDetail(id) {
   <div class="crumbs"><a href="#/orders">我的订单</a> / 订单详情</div>
   <div class="panel">
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-      <h3 style="margin:0">${STATUS_TEXT[o.status]}</h3>
+      <h3 style="margin:0">${orderStatusText(o)}</h3>
       <span class="muted" style="font-size:12.5px">订单号 ${o.orderNo} · 下单时间 ${new Date(o.createdAt).toLocaleString('zh-CN', { hour12: false })}</span>
       <div style="margin-left:auto;display:flex;gap:10px">
         ${o.status === 'pending' ? `<button class="btn btn-sm btn-ghost" onclick="cancelOrder(${o.id})">取消订单</button><button class="btn btn-sm btn-primary" onclick="showPay(${o.id})">去支付</button>` : ''}
@@ -522,6 +552,7 @@ async function renderOrderDetail(id) {
       </div>
     </div>
     ${o.status === 'pending' ? `<p style="margin-top:14px;color:#c0392b;font-size:13px">请在 24 小时内完成支付，超时订单将自动取消（演示环境不会自动取消）。</p>` : ''}
+    ${o.paymentMethod === 'monthly' ? `<p class="credit-note">本单为月结订单 · ${o.paymentStatus === 'settled' ? '已完成回款' : `应结日期 ${o.settlementDueAt ? new Date(o.settlementDueAt).toLocaleDateString('zh-CN') : '-'}`}</p>` : ''}
   </div>
   <div class="panel" style="margin-top:18px">
     <h3>商品信息</h3>
@@ -545,7 +576,9 @@ async function renderOrderDetail(id) {
       <div class="order-line"><span>商品合计</span><span>${money(o.total)}</span></div>
       <div class="order-line"><span>运费</span><span>${money(o.freight)}</span></div>
       <div class="order-line"><span>优惠</span><span>-${money(o.discount)}</span></div>
-      <div class="order-line total"><span>实付款</span><b>${money(o.pay)}</b></div>
+      <div class="order-line"><span>支付方式</span><span>${o.paymentMethod === 'monthly' ? '月结' : '在线支付'}</span></div>
+      <div class="order-line total"><span>${o.paymentMethod === 'monthly' ? '月结金额' : '实付款'}</span><b>${money(o.pay)}</b></div>
+      ${o.paymentMethod === 'monthly' ? `<div class="order-line"><span>回款状态</span><span>${o.paymentStatus === 'settled' ? '已结算' : '未结算'}</span></div>` : ''}
     </div>
   </div>`;
 }
