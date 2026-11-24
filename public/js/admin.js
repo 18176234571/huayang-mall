@@ -214,10 +214,45 @@ window.editProduct = id => {
       <div class="field"><label>总库存</label><input id="fStock" type="number" value="${p.stock}"></div>
       <div class="field"><label>状态</label><select id="fStatus"><option value="on" ${p.status === 'on' ? 'selected' : ''}>在售</option><option value="off" ${p.status === 'off' ? 'selected' : ''}>下架</option></select></div>
     </div>
-    <div class="field"><label>主图地址</label><input id="fImg" value="${esc(p.img)}"></div>
+    <div class="field"><label>商品主图</label>
+      <div class="img-upload">
+        <img id="fImgPreview" class="img-upload-preview" src="${esc(p.img)}" alt="主图预览">
+        <div class="img-upload-side">
+          <input id="fImg" value="${esc(p.img)}" placeholder="/images/p1.jpg 或 https://…">
+          <div class="img-upload-actions">
+            <label class="btn btn-sm btn-ghost img-upload-btn">上传本地图片<input type="file" id="fImgFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label>
+            <span class="muted" id="fImgTip">支持 JPG/PNG/WebP，≤5MB，也可直接填图片地址</span>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="field"><label>标签（逗号分隔）</label><input id="fTags" value="${esc((p.tags || []).join(','))}"></div>
     <div class="field"><label>规格（每行：规格名|价格|库存）</label><textarea id="fSpecs" placeholder="0.3g×20粒/盒|19.9|200">${esc(specText)}</textarea></div>
     <button class="btn btn-primary" onclick="saveProduct(${id ? "'" + id + "'" : 'null'})">保存商品</button>`);
+  const fileInput = $('#fImgFile');
+  if (fileInput) {
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      if (file.size > 5 * 1024 * 1024) return toast('图片不能超过 5MB');
+      const tip = $('#fImgTip');
+      tip.textContent = '上传中…';
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result);
+          fr.onerror = () => reject(new Error('读取图片失败'));
+          fr.readAsDataURL(file);
+        });
+        const r = await api('/api/admin/upload', { method: 'POST', body: { data: dataUrl } });
+        $('#fImg').value = r.url;
+        $('#fImgPreview').src = r.url;
+        tip.textContent = '已上传，保存商品后生效';
+      } catch (e) { tip.textContent = '上传失败'; toast(e.message); }
+    });
+  }
+  const urlInput = $('#fImg');
+  if (urlInput) urlInput.addEventListener('input', () => { $('#fImgPreview').src = urlInput.value.trim() || '/images/p1.jpg'; });
 };
 
 window.saveProduct = async id => {

@@ -11,6 +11,7 @@ const PORT = Number(process.env.PORT || 8080);
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
+const UPLOAD_DIR = path.join(ROOT, 'public', 'images', 'uploads');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const SECRET = 'huayang-mall-2026';
 
@@ -230,10 +231,10 @@ function send(res, code, data) {
 function fail(res, message, code = 400) { send(res, code, { ok: false, message }); }
 function ok(res, data = {}) { send(res, 200, Object.assign({ ok: true }, data)); }
 
-function readBody(req) {
+function readBody(req, limit = 2e6) {
   return new Promise((resolve, reject) => {
     let raw = '';
-    req.on('data', c => { raw += c; if (raw.length > 2e6) { req.destroy(); reject(new Error('body too large')); } });
+    req.on('data', c => { raw += c; if (raw.length > limit) { req.destroy(); reject(new Error('body too large')); } });
     req.on('end', () => {
       if (!raw) return resolve({});
       try { resolve(JSON.parse(raw)); } catch (e) { reject(new Error('请求体不是合法 JSON')); }
@@ -803,8 +804,25 @@ route('POST', '/api/admin/categories', async (req, res) => {
   db.categories.push(c); save(); ok(res, { category: c });
 });
 
+/* ------------------------------------------------------------------ 图片上传 */
+const UPLOAD_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif' };
+
+route('POST', '/api/admin/upload', async (req, res) => {
+  if (!adminGuard(req, res)) return;
+  const b = await readBody(req, 9e6);
+  const m = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(String(b.data || ''));
+  if (!m) return fail(res, '只支持 JPG / PNG / WebP / GIF 图片');
+  const buf = Buffer.from(m[2], 'base64');
+  if (!buf.length) return fail(res, '图片内容为空');
+  if (buf.length > 5 * 1024 * 1024) return fail(res, '图片不能超过 5MB');
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  const name = 'u' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex') + UPLOAD_EXT[m[1]];
+  fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);
+  ok(res, { url: '/images/uploads/' + name, size: buf.length });
+});
+
 /* ------------------------------------------------------------------ 静态资源 */
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
 
 function serveStatic(req, res, pathname) {
   let filePath;

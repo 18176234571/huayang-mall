@@ -4,3 +4,4 @@ deploy/
 预览图/
 *.zip
 .DS_Store
+public/images/uploads/

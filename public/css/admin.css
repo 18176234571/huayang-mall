@@ -136,5 +136,12 @@ td.table-ops .btn{margin-left:6px}
 .modal .btn{width:100%;margin-top:8px}
 .modal .close{float:right;color:#9aa6a0;font-size:18px;line-height:1;cursor:pointer}
 
+/* ---------- 主图上传 ---------- */
+.img-upload{display:flex;gap:14px;align-items:flex-start}
+.img-upload-preview{width:96px;height:96px;border-radius:10px;object-fit:cover;border:1px solid var(--line);background:#f6f7f8;flex:none;margin:0}
+.img-upload-side{flex:1;min-width:0}
+.img-upload-actions{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}
+.modal .img-upload-btn{width:auto;margin:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+
 @media (max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.grid-2{grid-template-columns:1fr}.sidebar{width:196px}}
 @media (max-width:820px){.sidebar{position:static;width:100%;min-height:auto}.shell{flex-direction:column}.content{margin-left:0}.kpi-grid{grid-template-columns:1fr 1fr}.page{padding:18px}}
