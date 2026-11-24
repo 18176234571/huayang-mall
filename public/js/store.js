@@ -3,6 +3,18 @@ const state = { token: localStorage.getItem('hy_token') || '', user: null, home:
 const $ = (s, r = document) => r.querySelector(s);
 const money = n => '¥' + Number(n || 0).toFixed(2);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function couponDate(v, endOfDay) {
+  if (!v) return null;
+  const s = String(v).trim();
+  const text = /^\d{4}-\d{2}-\d{2}$/.test(s) ? s + (endOfDay ? 'T23:59:59.999' : 'T00:00:00.000') : s;
+  const d = new Date(text);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function couponActive(c, now = Date.now()) {
+  const start = couponDate(c && c.start, false);
+  const end = couponDate(c && c.end, true);
+  return Boolean(start && end && now >= start.getTime() && now <= end.getTime());
+}
 
 async function api(path, opt = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -359,7 +371,7 @@ async function renderCheckout(mode) {
   if (!state.user) return `<div class="empty card"><span class="ico">🔒</span>请先登录后再结算<div style="margin-top:18px"><button class="btn btn-primary" onclick="openLogin()">去登录</button></div></div>`;
   const [addrRes, cartRes, couponRes] = await Promise.all([api('/api/addresses'), api('/api/cart'), api('/api/coupons/mine')]);
   const addrs = addrRes.list;
-  const coupons = couponRes.list.filter(c => c.status === 'unused');
+  const coupons = couponRes.list.filter(c => c.status === 'unused' && couponActive(c));
   const items = mode === 'buynow' ? JSON.parse(sessionStorage.getItem('hy_buynow') || '[]') : cartRes.list.filter(i => i.checked);
   if (!items.length) return `<div class="empty card"><span class="ico">📦</span>没有待结算的商品<a href="#/cart" style="display:inline-block;margin-top:16px">返回购物车</a></div>`;
   const total = items.reduce((s, i) => s + i.price * i.qty, 0);
@@ -411,7 +423,7 @@ function bindCheckout() {
   });
   $('#couponPick').onclick = async () => {
     const { list } = await api('/api/coupons/mine');
-    const usable = list.filter(c => c.status === 'unused' && co.total >= c.min);
+    const usable = list.filter(c => c.status === 'unused' && couponActive(c) && co.total >= c.min);
     openModal(`<h3>选择优惠券</h3><p class="muted">本单商品金额 ${money(co.total)}</p>
       <div id="cpList">
         <div class="addr${!co.couponId ? ' on' : ''}" data-cp="" style="margin-bottom:10px"><b>不使用优惠券</b></div>
@@ -552,7 +564,7 @@ async function renderMine() {
     <div class="mine-stats">
       <div><b>${stats.total}</b><small>历史订单</small></div>
       <div><b>${money(stats.amount)}</b><small>累计消费</small></div>
-      <div><b>${couponRes.list.filter(c => c.status === 'unused').length}</b><small>可用优惠券</small></div>
+      <div><b>${couponRes.list.filter(c => c.status === 'unused' && couponActive(c)).length}</b><small>可用优惠券</small></div>
     </div>
   </div>
   <div class="mine-grid">
@@ -577,7 +589,7 @@ async function renderMine() {
   <div class="grid-products" style="grid-template-columns:repeat(3,1fr)">
     ${couponRes.list.map(c => `<div class="coupon${c.status !== 'unused' ? ' used' : ''}">
       <div class="left"><small>立减</small><b>¥${c.amount}</b><small>满 ${c.min} 可用</small></div>
-      <div class="right"><div><h4>${esc(c.name)}</h4><p>有效期至 ${new Date(c.end).toLocaleDateString('zh-CN')}</p></div><span class="tag ${c.status === 'unused' ? 'tag-green' : ''}">${c.status === 'unused' ? '可使用' : '已使用'}</span></div>
+      <div class="right"><div><h4>${esc(c.name)}</h4><p>有效期至 ${new Date(c.end).toLocaleDateString('zh-CN')}</p></div><span class="tag ${c.status === 'unused' && couponActive(c) ? 'tag-green' : ''}">${c.status === 'used' ? '已使用' : (couponActive(c) ? '可使用' : '已过期')}</span></div>
     </div>`).join('') || '<div class="muted">还没有优惠券</div>'}
   </div>
   <div style="text-align:center;margin:34px 0"><button class="btn btn-ghost btn-sm" onclick="signOut()">退出登录</button></div>`;
@@ -612,7 +624,7 @@ async function renderCoupons() {
     ${list.map(c => `<div class="coupon">
       <div class="left"><small>立减</small><b>¥${c.amount}</b><small>满 ${c.min} 可用</small></div>
       <div class="right"><div><h4>${esc(c.name)}</h4><p>有效期至 ${new Date(c.end).toLocaleDateString('zh-CN')} · 剩余 ${Math.max(0, c.total - c.used)} 张</p></div>
-        <button class="btn btn-sm ${c.owned ? 'btn-ghost' : 'btn-gold'}" onclick="claimCoupon('${c.id}',${c.owned})">${c.owned ? '已领取' : '立即领取'}</button>
+        <button class="btn btn-sm ${c.owned || !couponActive(c) ? 'btn-ghost' : 'btn-gold'}" onclick="claimCoupon('${c.id}',${c.owned || !couponActive(c)})">${c.owned ? '已领取' : (couponActive(c) ? '立即领取' : '已过期')}</button>
       </div>
     </div>`).join('')}
   </div>`;

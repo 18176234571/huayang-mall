@@ -270,11 +270,30 @@ function genOrderNo(n) {
   const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
   return `HY${stamp}${String(n).padStart(5, '0')}`;
 }
+function parsePositiveQty(value) {
+  const n = typeof value === 'string' ? Number(value.trim()) : Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+function parseCouponDate(value, endOfDay) {
+  if (!value) return null;
+  const s = String(value).trim();
+  const text = /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}` : s;
+  const d = new Date(text);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function couponActive(coupon, now = Date.now()) {
+  const start = parseCouponDate(coupon && coupon.start, false);
+  const end = parseCouponDate(coupon && coupon.end, true);
+  return Boolean(start && end && now >= start.getTime() && now <= end.getTime());
+}
+function couponApplies(coupon, total, now = Date.now()) {
+  return Boolean(coupon && couponActive(coupon, now) && total >= Number(coupon.min || 0));
+}
 function orderTotal(items, coupon) {
   const total = items.reduce((s, i) => s + i.price * i.qty, 0);
   const freight = total >= db.settings.freeFreight ? 0 : db.settings.freight;
-  const discount = coupon && total >= coupon.min ? coupon.amount : 0;
-  return { total: round(total), freight: round(freight), discount: round(discount), pay: round(total + freight - discount) };
+  const discount = couponApplies(coupon, total) ? Math.min(Number(coupon.amount || 0), total + freight) : 0;
+  return { total: round(total), freight: round(freight), discount: round(discount), pay: round(Math.max(0, total + freight - discount)) };
 }
 
 /* ------------------------------------------------------------------ 路由 */
@@ -431,11 +450,18 @@ route('POST', '/api/cart', async (req, res) => {
   const b = await readBody(req);
   const p = db.products.find(x => x.id === b.productId);
   if (!p) return fail(res, '商品不存在', 404);
+  if (p.status !== 'on') return fail(res, '商品已下架', 400);
+  const qty = parsePositiveQty(b.qty ?? 1);
+  if (qty === null) return fail(res, '商品数量必须为大于 0 的整数', 400);
   const cart = db.carts[user.id] || (db.carts[user.id] = []);
   const specName = b.spec || p.specs[0].name;
+  const spec = p.specs.find(s => s.name === specName);
+  if (!spec) return fail(res, '规格不存在', 400);
   const exists = cart.find(i => i.productId === p.id && i.spec === specName);
-  if (exists) exists.qty += Number(b.qty || 1);
-  else cart.push({ productId: p.id, spec: specName, qty: Number(b.qty || 1), checked: true });
+  const nextQty = (exists ? exists.qty : 0) + qty;
+  if (nextQty > spec.stock) return fail(res, `库存不足：${p.name}`, 400);
+  if (exists) exists.qty = nextQty;
+  else cart.push({ productId: p.id, spec: specName, qty, checked: true });
   save(); ok(res, { count: cart.reduce((s, i) => s + i.qty, 0) });
 });
 
@@ -445,7 +471,16 @@ route('PUT', '/api/cart', async (req, res) => {
   const cart = db.carts[user.id] || [];
   const it = cart.find(i => i.productId === b.productId && i.spec === b.spec);
   if (!it) return fail(res, '购物车中无此商品', 404);
-  if (typeof b.qty === 'number') it.qty = Math.max(1, b.qty);
+  if (b.qty !== undefined) {
+    const qty = parsePositiveQty(b.qty);
+    if (qty === null) return fail(res, '商品数量必须为大于 0 的整数', 400);
+    const p = db.products.find(x => x.id === b.productId);
+    const spec = p && p.specs.find(s => s.name === it.spec);
+    if (!p || !spec) return fail(res, '商品或规格不存在', 400);
+    if (p.status !== 'on') return fail(res, '商品已下架', 400);
+    if (qty > spec.stock) return fail(res, `库存不足：${p.name}`, 400);
+    it.qty = qty;
+  }
   if (typeof b.checked === 'boolean') it.checked = b.checked;
   save(); ok(res, {});
 });
@@ -469,6 +504,7 @@ route('POST', '/api/coupons/:id/claim', (req, res, p) => {
   const user = currentUser(req); if (!user) return fail(res, '请先登录', 401);
   const coupon = db.coupons.find(c => c.id === p.id);
   if (!coupon) return fail(res, '优惠券不存在', 404);
+  if (!couponActive(coupon)) return fail(res, '优惠券已过期或未生效', 400);
   const mine = db.userCoupons[user.id] || (db.userCoupons[user.id] = []);
   if (mine.some(u => u.couponId === coupon.id)) return fail(res, '已领取过该券');
   if (coupon.used >= coupon.total) return fail(res, '优惠券已领完');
@@ -491,38 +527,54 @@ route('POST', '/api/orders', async (req, res) => {
   const user = currentUser(req); if (!user) return fail(res, '请先登录', 401);
   const b = await readBody(req);
   const addressList = db.addresses[user.id] || [];
-  const addr = addressList.find(a => a.id === b.addressId) || addressList.find(a => a.isDefault);
-  if (!addr) return fail(res, '请选择收货地址');
+  let addr;
+  if (b.addressId !== undefined && b.addressId !== null && b.addressId !== '') {
+    addr = addressList.find(a => a.id === b.addressId);
+    if (!addr) return fail(res, '收货地址不存在', 400);
+  } else {
+    addr = addressList.find(a => a.isDefault) || addressList[0];
+  }
+  if (!addr) return fail(res, '请选择收货地址', 400);
 
   let items = [];
   if (Array.isArray(b.items) && b.items.length) {
     // 立即购买
     for (const it of b.items) {
       const p = db.products.find(x => x.id === it.productId);
-      if (!p) return fail(res, `商品已下架：${it.productId}`);
-      const spec = p.specs.find(s => s.name === it.spec) || p.specs[0];
-      if (spec.stock < it.qty) return fail(res, `库存不足：${p.name}`);
-      items.push({ productId: p.id, name: p.name, spec: spec.name, price: spec.price, qty: it.qty, img: p.img });
+      if (!p || p.status !== 'on') return fail(res, `商品已下架：${it.productId}`, 400);
+      const spec = p.specs.find(s => s.name === it.spec);
+      if (!spec) return fail(res, `商品规格不存在：${p.name}`, 400);
+      const qty = parsePositiveQty(it.qty);
+      if (qty === null) return fail(res, '商品数量必须为大于 0 的整数', 400);
+      if (spec.stock < qty) return fail(res, `库存不足：${p.name}`, 400);
+      items.push({ productId: p.id, name: p.name, spec: spec.name, price: spec.price, qty, img: p.img });
     }
   } else {
     const cart = (db.carts[user.id] || []).filter(i => i.checked !== false);
-    if (!cart.length) return fail(res, '请选择要结算的商品');
+    if (!cart.length) return fail(res, '请选择要结算的商品', 400);
     for (const it of cart) {
       const p = db.products.find(x => x.id === it.productId);
-      if (!p) continue;
-      const spec = p.specs.find(s => s.name === it.spec) || p.specs[0];
-      if (spec.stock < it.qty) return fail(res, `库存不足：${p.name}`);
-      items.push({ productId: p.id, name: p.name, spec: spec.name, price: spec.price, qty: it.qty, img: p.img });
+      if (!p || p.status !== 'on') return fail(res, `商品已下架：${it.productId}`, 400);
+      const spec = p.specs.find(s => s.name === it.spec);
+      if (!spec) return fail(res, `商品规格不存在：${p.name}`, 400);
+      const qty = parsePositiveQty(it.qty);
+      if (qty === null) return fail(res, `购物车商品数量异常：${p.name}`, 400);
+      if (spec.stock < qty) return fail(res, `库存不足：${p.name}`, 400);
+      items.push({ productId: p.id, name: p.name, spec: spec.name, price: spec.price, qty, img: p.img });
     }
   }
-  if (!items.length) return fail(res, '订单商品为空');
+  if (!items.length) return fail(res, '订单商品为空', 400);
 
   let coupon = null;
   if (b.couponId) {
     const mine = db.userCoupons[user.id] || [];
     const uc = mine.find(u => u.couponId === b.couponId && u.status === 'unused');
     const c = db.coupons.find(x => x.id === b.couponId);
-    if (uc && c) coupon = c;
+    if (!uc || !c) return fail(res, '优惠券不可用或已使用', 400);
+    if (!couponActive(c)) return fail(res, '优惠券已过期或未生效', 400);
+    const subtotal = round(items.reduce((s, i) => s + i.price * i.qty, 0));
+    if (subtotal < Number(c.min || 0)) return fail(res, '未满足优惠券使用门槛', 400);
+    coupon = c;
   }
 
   const calc = orderTotal(items, coupon);
