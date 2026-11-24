@@ -1,0 +1,13 @@
+{
+  "name": "huayang-mall",
+  "version": "1.0.0",
+  "private": true,
+  "description": "华阳自营商城 · 自营电商平台（前台 + 管理后台）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>华阳自营商城 · 正品直供 健康到家</title>
+<link rel="stylesheet" href="/css/store.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230f6b57'/><path d='M16 8v16M8 16h16' stroke='white' stroke-width='3'/></svg>">
+</head>
+<body>
+<header class="site-header">
+  <div class="topbar">
+    <div class="wrap">
+      <span class="topbar-left">自营仓直发 · 16:00 前下单当日出库</span>
+      <div class="topbar-right">
+        <a href="#/mine" id="topUser">你好，请登录</a>
+        <span class="sep">|</span>
+        <a href="#/orders">我的订单</a>
+        <span class="sep">|</span>
+        <a href="#/coupons">领券中心</a>
+        <span class="sep">|</span>
+        <a href="/admin" target="_blank">商家后台</a>
+      </div>
+    </div>
+  </div>
+  <div class="header-main wrap">
+    <a class="brand" href="#/">
+      <span class="brand-mark">华</span>
+      <span class="brand-text"><b>华阳自营商城</b><i>HUAYANG MALL · 正品直供</i></span>
+    </a>
+    <div class="searchbox">
+      <input id="searchInput" placeholder="搜索药品、保健品、器械…" autocomplete="off">
+      <button id="searchBtn" aria-label="搜索">搜索</button>
+    </div>
+    <button class="cart-btn" id="cartBtn">
+      <span class="cart-icon">🛒</span>
+      <span>购物车</span>
+      <em id="cartCount">0</em>
+    </button>
+  </div>
+  <nav class="mainnav">
+    <div class="wrap">
+      <a href="#/" data-nav="home">首页</a>
+      <a href="#/list" data-nav="list">全部商品</a>
+      <div class="cat-drop" id="catDrop"></div>
+      <a href="#/list?sort=sales" data-nav="hot">热销榜</a>
+      <a href="#/coupons" data-nav="coupons">领券中心</a>
+      <a href="#/mine" data-nav="mine">会员中心</a>
+      <span class="nav-right">客服 0759-8888888</span>
+    </div>
+  </nav>
+</header>
+
+<main id="app" class="wrap"></main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="foot-cols">
+      <div><h4>购物指南</h4><p>注册与登录</p><p>下单流程</p><p>支付方式</p></div>
+      <div><h4>配送与售后</h4><p>满 99 元包邮</p><p>七天无理由退货</p><p>正品保障承诺</p></div>
+      <div><h4>关于我们</h4><p>华阳自营商城</p><p>自营仓直发</p><p>客服热线 0759-8888888</p></div>
+      <div class="foot-brand">
+        <span class="brand-mark">华</span>
+        <p>华阳自营商城</p>
+        <small>本平台为自营模式，商品由平台统一采购、统一发货、统一售后。</small>
+      </div>
+    </div>
+    <div class="foot-copy">© 2026 华阳自营商城 · 本站为演示环境，商品与订单数据仅用于展示交易流程</div>
+  </div>
+</footer>
+
+<div class="modal-mask" id="modalMask">
+  <div class="modal" id="modalBox"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/js/store.js"></script>
+</body>
+</html>

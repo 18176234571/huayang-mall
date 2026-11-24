@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>华阳自营商城 · 商家后台</title>
+<link rel="stylesheet" href="/css/admin.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230d3f34'/><rect x='8' y='9' width='16' height='4' fill='white'/><rect x='8' y='16' width='16' height='4' fill='%23b8924a'/><rect x='8' y='23' width='10' height='3' fill='white'/></svg>">
+</head>
+<body>
+<div class="gate" id="loginGate">
+  <div class="gate-card">
+    <div class="gate-brand"><span class="brand-mark">华</span><div><b>华阳自营商城</b><small>商家管理后台</small></div></div>
+    <h2>登录管理后台</h2>
+    <p class="muted">仅平台管理员可进入，用于商品、订单与营销管理</p>
+    <div class="field"><label>管理员手机号</label><input id="loginPhone" value="13800000000"></div>
+    <div class="field"><label>登录密码</label><input id="loginPwd" type="password" value="admin123"></div>
+    <button class="btn btn-primary" id="loginBtn" style="width:100%">进入后台</button>
+    <p class="gate-tip">演示账号 13800000000 / admin123 · <a href="/">返回商城前台</a></p>
+  </div>
+</div>
+
+<div class="shell" id="adminShell" hidden>
+  <aside class="sidebar">
+    <div class="side-brand"><span class="brand-mark">华</span><div><b>华阳自营</b><small>商家管理后台</small></div></div>
+    <nav class="side-nav" id="sideNav"></nav>
+    <div class="side-foot">
+      <a href="/" target="_blank">↗ 打开商城前台</a>
+      <a href="javascript:;" onclick="logout()">退出登录</a>
+    </div>
+  </aside>
+  <div class="content">
+    <header class="content-top">
+      <div><h1 id="pageTitle">数据看板</h1><p id="pageSub" class="muted"></p></div>
+      <div class="top-right">
+        <span class="live-dot"></span><span class="muted" style="font-size:12.5px">数据实时</span>
+        <span class="divider"></span>
+        <span class="admin-name" id="adminName">平台管理员</span>
+      </div>
+    </header>
+    <main id="page" class="page"></main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="modal-mask" id="modalMask"><div class="modal" id="modalBox"></div></div>
+
+<script src="/js/admin.js"></script>
+</body>
+</html>

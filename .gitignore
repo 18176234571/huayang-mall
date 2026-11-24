@@ -1,0 +1,6 @@
+node_modules/
+data/
+deploy/
+预览图/
+*.zip
+.DS_Store
